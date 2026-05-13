@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# virtual environments
+venv/
+.env
+.venv/
+
+# config
+*.json
+!context/*.json
+
+# IDE / editor
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
