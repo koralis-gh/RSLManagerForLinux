@@ -6,11 +6,38 @@ LOG_FILE="@LOG_FILE@"
 PID_FILE="@PID_FILE@"
 WM_CLASS="@WM_CLASS@"
 APP_TITLE="@APP_TITLE@"
+LOG_MAX_LINES=60000
 
 mkdir -p "$LOG_DIR"
 
+trim_log() {
+    [ -f "$LOG_FILE" ] || return 0
+
+    line_count=$(wc -l < "$LOG_FILE" 2>/dev/null || echo 0)
+    [ "$line_count" -gt "$LOG_MAX_LINES" ] 2>/dev/null || return 0
+
+    keep_lines=$((LOG_MAX_LINES - 1))
+    trimmed_count=$((line_count - keep_lines))
+    tmp_file="$LOG_FILE.tmp.$$"
+
+    if tail -n "$keep_lines" "$LOG_FILE" > "$tmp_file" 2>/dev/null; then
+        {
+            printf '%s Log trimmed: removed %s older lines; kept newest %s lines\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$trimmed_count" "$keep_lines"
+            cat "$tmp_file"
+        } > "$LOG_FILE"
+    fi
+
+    rm -f "$tmp_file"
+}
+
 log() {
     printf '%s %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" >> "$LOG_FILE"
+}
+
+log_stream() {
+    while IFS= read -r line; do
+        log "$1: $line"
+    done
 }
 
 focus_existing() {
@@ -23,6 +50,7 @@ focus_existing() {
     return 1
 }
 
+trim_log
 log "Launch requested: $0 $*"
 
 existing_pid=""
@@ -54,7 +82,19 @@ echo "$$" > "$PID_FILE"
 trap 'rm -f "$PID_FILE"' EXIT INT TERM
 
 log "Starting app with $PYTHON"
-"$PYTHON" gui.py "$@" >> "$LOG_FILE" 2>&1
-status=$?
+fifo_file="$LOG_DIR/$(basename "$PID_FILE").fifo.$$"
+if mkfifo "$fifo_file" 2>/dev/null; then
+    log_stream "App" < "$fifo_file" &
+    logger_pid=$!
+    "$PYTHON" gui.py "$@" > "$fifo_file" 2>&1
+    status=$?
+    wait "$logger_pid" 2>/dev/null || true
+    rm -f "$fifo_file"
+else
+    log "Failed to create log fifo; app output will be appended without per-line timestamps"
+    "$PYTHON" gui.py "$@" >> "$LOG_FILE" 2>&1
+    status=$?
+fi
 log "App exited with status $status"
+trim_log
 exit "$status"

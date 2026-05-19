@@ -3,10 +3,13 @@ import os
 import shutil
 import tarfile
 import urllib.request
+from collections import deque
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
 
 APP_NAME = "RSLManagerForLinux"
+APP_LOG_MAX_LINES = 60000
 DEFAULT_CONFIG = {
     "game_exe_path": "",
     "prefix_path": "~/.RSLManagerForLinux/prefixes/raid1",
@@ -37,6 +40,43 @@ def get_repo_root() -> Path:
 
 def get_app_log_path() -> Path:
     return get_repo_root() / "logs" / f"{APP_NAME}.log"
+
+
+def trim_app_log(max_lines: int = APP_LOG_MAX_LINES) -> None:
+    log_path = get_app_log_path()
+    if max_lines < 2 or not log_path.exists():
+        return
+
+    try:
+        total_lines = 0
+        tail: deque[str] = deque(maxlen=max_lines - 1)
+        with log_path.open("r", encoding="utf-8", errors="replace") as handle:
+            for total_lines, line in enumerate(handle, start=1):
+                tail.append(line)
+
+        if total_lines <= max_lines - 1:
+            return
+
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        trimmed_count = total_lines - len(tail)
+        with log_path.open("w", encoding="utf-8") as handle:
+            handle.write(f"{timestamp} Log trimmed: removed {trimmed_count} older lines; kept newest {len(tail)} lines\n")
+            handle.writelines(tail)
+    except OSError:
+        pass
+
+
+def append_app_log(message: str, trim: bool = True) -> None:
+    log_path = get_app_log_path()
+    try:
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        with log_path.open("a", encoding="utf-8") as handle:
+            handle.write(f"{timestamp} {message}\n")
+        if trim:
+            trim_app_log()
+    except OSError:
+        pass
 
 
 def get_user_config_dir() -> Path:

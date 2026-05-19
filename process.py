@@ -1,7 +1,7 @@
 import os
 import signal
 import subprocess
-from datetime import datetime
+import threading
 from pathlib import Path
 from typing import Any, Dict, List
 
@@ -9,14 +9,20 @@ import config as config_module
 
 
 def _log(message: str) -> None:
-    log_path = config_module.get_app_log_path()
+    config_module.append_app_log(message)
+
+
+def _log_process_output(process: subprocess.Popen[str]) -> None:
+    if process.stdout is None:
+        return
+
     try:
-        log_path.parent.mkdir(parents=True, exist_ok=True)
-        with log_path.open("a", encoding="utf-8") as handle:
-            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            handle.write(f"{timestamp} {message}\n")
-    except OSError:
-        pass
+        with process.stdout:
+            for line in process.stdout:
+                config_module.append_app_log(f"Proton: {line.rstrip()}", trim=False)
+        config_module.append_app_log(f"Proton process exited with status {process.wait()}")
+    finally:
+        config_module.trim_app_log()
 
 
 def _read_cmdline(pid: int) -> str:
@@ -132,21 +138,21 @@ def launch_raid(game_exe_path: str, prefix_path: str) -> tuple[bool, str]:
     _log(f"Launch cwd: {exe_to_run.parent}")
     _log(f"STEAM_COMPAT_DATA_PATH={env['STEAM_COMPAT_DATA_PATH']}")
     _log(f"STEAM_COMPAT_CLIENT_INSTALL_PATH={env['STEAM_COMPAT_CLIENT_INSTALL_PATH']}")
-    log_path = config_module.get_app_log_path()
 
     try:
-        log_path.parent.mkdir(parents=True, exist_ok=True)
-        log_handle = log_path.open("a", encoding="utf-8")
-        log_handle.write(f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} Proton process output begins\n")
-        log_handle.flush()
-        subprocess.Popen(
+        _log("Proton process output begins")
+        process = subprocess.Popen(
             command,
-            stdout=log_handle,
+            stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             env=env,
             cwd=exe_to_run.parent,
             close_fds=True,
+            text=True,
+            errors="replace",
+            bufsize=1,
         )
+        threading.Thread(target=_log_process_output, args=(process,), daemon=True).start()
         _log("Launch command started successfully")
         return True, ""
     except FileNotFoundError:
