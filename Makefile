@@ -18,33 +18,49 @@ PIXMAP_FILE := $(PIXMAP_DIR)/$(APP_ID).png
 
 check-prereqs:
 	@set -e; \
-	if ! command -v python3 >/dev/null 2>&1; then \
-		echo "Missing python3."; \
-		echo "Debian/Ubuntu: sudo apt install python3"; \
-		echo "Fedora: sudo dnf install python3"; \
-		exit 1; \
-	fi; \
-	PYVER=$$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")'); \
-	if ! python3 -c 'import tkinter' >/dev/null 2>&1; then \
-		echo "Missing tkinter for python3 ($$PYVER)."; \
-		echo "Debian/Ubuntu: sudo apt install python3-tk python$$PYVER-tk"; \
-		echo "Fedora: sudo dnf install python3-tkinter"; \
-		exit 1; \
-	fi; \
-	if ! command -v wmctrl >/dev/null 2>&1; then \
-		echo "Missing wmctrl, which is used to focus an already-running app window."; \
-		echo "Debian/Ubuntu: sudo apt install wmctrl"; \
-		echo "Fedora: sudo dnf install wmctrl"; \
-		exit 1; \
-	fi; \
-	TMPDIR=$$(mktemp -d); \
-	if ! python3 -m venv "$$TMPDIR/venv" >/dev/null 2>&1; then \
+	missing=""; \
+	if command -v apt >/dev/null 2>&1; then pm="apt"; elif command -v dnf >/dev/null 2>&1; then pm="dnf"; else pm=""; fi; \
+	if ! command -v python3 >/dev/null 2>&1; then missing="$$missing python3"; fi; \
+	PYVER=""; \
+	if command -v python3 >/dev/null 2>&1; then PYVER=$$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")'); fi; \
+	if command -v python3 >/dev/null 2>&1 && ! python3 -c 'import tkinter' >/dev/null 2>&1; then missing="$$missing tkinter"; fi; \
+	if ! command -v wmctrl >/dev/null 2>&1; then missing="$$missing wmctrl"; fi; \
+	if [ ! -e /lib/ld-linux.so.2 ] && [ ! -e /lib32/ld-linux.so.2 ] && [ ! -e /lib/i386-linux-gnu/ld-linux.so.2 ]; then missing="$$missing 32-bit-runtime"; fi; \
+	if command -v python3 >/dev/null 2>&1; then \
+		TMPDIR=$$(mktemp -d); \
+		if ! python3 -m venv "$$TMPDIR/venv" >/dev/null 2>&1; then missing="$$missing venv"; fi; \
 		rm -rf "$$TMPDIR"; \
-		echo "Missing working venv/ensurepip support for python3 ($$PYVER)."; \
-		echo "Debian/Ubuntu: sudo apt install python3-venv python$$PYVER-venv"; \
-		echo "Fedora: sudo dnf install python3"; \
-		exit 1; \
 	fi; \
+	if [ -n "$$missing" ]; then \
+		echo "Missing system dependencies:$$missing"; \
+		if [ "$$pm" = "apt" ]; then \
+			pkgs="python3 python3-venv python3-tk python3-pip make wmctrl desktop-file-utils gtk-update-icon-cache"; \
+			i386_pkgs="libc6:i386 libstdc++6:i386 libgcc-s1:i386"; \
+			echo "This can be installed with:"; \
+			echo "  sudo dpkg --add-architecture i386"; \
+			echo "  sudo apt update"; \
+			echo "  sudo apt install $$pkgs $$i386_pkgs"; \
+			printf "Run these apt commands now? [y/N] "; \
+			read answer; \
+			case "$$answer" in [Yy]*) sudo dpkg --add-architecture i386; sudo apt update; sudo apt install $$pkgs $$i386_pkgs ;; *) exit 1 ;; esac; \
+		elif [ "$$pm" = "dnf" ]; then \
+			pkgs="python3 python3-tkinter python3-pip make wmctrl desktop-file-utils gtk-update-icon-cache glibc.i686 libstdc++.i686 libgcc.i686"; \
+			echo "This can be installed with:"; \
+			echo "  sudo dnf install $$pkgs"; \
+			printf "Run this dnf command now? [y/N] "; \
+			read answer; \
+			case "$$answer" in [Yy]*) sudo dnf install $$pkgs ;; *) exit 1 ;; esac; \
+		else \
+			echo "Unable to detect apt or dnf. Please install the missing dependencies manually."; \
+			exit 1; \
+		fi; \
+	fi; \
+	if ! command -v python3 >/dev/null 2>&1; then echo "python3 is still missing."; exit 1; fi; \
+	if ! python3 -c 'import tkinter' >/dev/null 2>&1; then echo "tkinter is still missing."; exit 1; fi; \
+	if ! command -v wmctrl >/dev/null 2>&1; then echo "wmctrl is still missing."; exit 1; fi; \
+	if [ ! -e /lib/ld-linux.so.2 ] && [ ! -e /lib32/ld-linux.so.2 ] && [ ! -e /lib/i386-linux-gnu/ld-linux.so.2 ]; then echo "32-bit Linux loader is still missing."; exit 1; fi; \
+	TMPDIR=$$(mktemp -d); \
+	if ! python3 -m venv "$$TMPDIR/venv" >/dev/null 2>&1; then rm -rf "$$TMPDIR"; echo "venv support is still missing."; exit 1; fi; \
 	rm -rf "$$TMPDIR"
 
 install: check-prereqs
