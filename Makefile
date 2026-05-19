@@ -72,7 +72,7 @@ install-app:
 	mkdir -p "$(BIN_DIR)" "$(ICON_DIR)" "$(PIXMAP_DIR)" "$(DESKTOP_DIR)"
 	cp img/rsl-icon.png "$(ICON_FILE)"
 	cp img/rsl-icon.png "$(PIXMAP_FILE)"
-	printf "%s\n" "#!/bin/sh" "APP_DIR=\"$(APP_DIR)\"" "PYTHON=\"$(PYTHON)\"" "LOG_DIR=\"$(LOG_DIR)\"" "LOG_FILE=\"$(LOG_FILE)\"" "PID_FILE=\"$(LOG_DIR)/$(APP_ID).pid\"" "WM_CLASS=\"$(WM_CLASS)\"" "APP_TITLE=\"$(APP_ID)\"" "mkdir -p \"$$LOG_DIR\"" "log() { printf '%s %s\n' \"\$$(date '+%Y-%m-%d %H:%M:%S')\" \"$$*\" >> \"$$LOG_FILE\"; }" "focus_existing() {" "  if wmctrl -xa \"$$WM_CLASS\" >> \"$$LOG_FILE\" 2>&1 || wmctrl -a \"$$APP_TITLE\" >> \"$$LOG_FILE\" 2>&1; then" "    log \"Focused existing app window\"" "    return 0" "  fi" "  log \"Failed to focus existing app window with wmctrl\"" "  return 1" "}" "log \"Launch requested: $$0 $$*\"" "existing_pid=\"\"" "if [ -r \"$$PID_FILE\" ]; then" "  existing_pid=\$$(cat \"$$PID_FILE\")" "  if ! kill -0 \"$$existing_pid\" >/dev/null 2>&1; then" "    log \"Removing stale PID file for PID $$existing_pid\"" "    rm -f \"$$PID_FILE\"" "    existing_pid=\"\"" "  fi" "fi" "if [ -z \"$$existing_pid\" ]; then" "  existing_pid=\$$(pgrep -f \"python.*gui.py\" | grep -v \"^$$$$\" | head -n 1 || true)" "fi" "if [ -n \"$$existing_pid\" ]; then" "  log \"Existing app process detected: PID $$existing_pid\"" "  focus_existing" "  exit 0" "fi" "cd \"$$APP_DIR\" || { log \"Failed to cd into $$APP_DIR\"; exit 1; }" "echo \"$$$$\" > \"$$PID_FILE\"" "trap 'rm -f \"$$PID_FILE\"' EXIT INT TERM" "log \"Starting app with $$PYTHON\"" "\"$$PYTHON\" gui.py \"$$@\" >> \"$$LOG_FILE\" 2>&1" "status=$$?" "log \"App exited with status $$status\"" "exit \"$$status\"" > "$(BIN_FILE)"
+	sed -e 's|@APP_DIR@|$(APP_DIR)|g' -e 's|@PYTHON@|$(PYTHON)|g' -e 's|@LOG_DIR@|$(LOG_DIR)|g' -e 's|@LOG_FILE@|$(LOG_FILE)|g' -e 's|@PID_FILE@|$(LOG_DIR)/$(APP_ID).pid|g' -e 's|@WM_CLASS@|$(WM_CLASS)|g' -e 's|@APP_TITLE@|$(APP_ID)|g' scripts/RSLManagerForLinux.in > "$(BIN_FILE)"
 	chmod +x "$(BIN_FILE)"
 	printf "%s\n" "[Desktop Entry]" "Type=Application" "Name=RSLManagerForLinux" "Comment=Raid Shadow Legends launcher and process manager for Linux" "Exec=$(BIN_FILE)" "Icon=$(PIXMAP_FILE)" "Terminal=false" "Categories=Game;Utility;" "StartupWMClass=$(WM_CLASS)" > "$(DESKTOP_FILE)"
 	chmod +x "$(DESKTOP_FILE)"
@@ -81,6 +81,13 @@ install-app:
 	touch "$(PROFILE_FILE)"
 	@grep -qxF 'export PATH="$$HOME/.local/bin:$$PATH"' "$(PROFILE_FILE)" || printf "%s\n" "" "# Added by RSLManagerForLinux installer" 'export PATH="$$HOME/.local/bin:$$PATH"' >> "$(PROFILE_FILE)"
 	@case ":$$PATH:" in *:$(BIN_DIR):*) ;; *) echo "Added $(BIN_DIR) to $(PROFILE_FILE). Run '. $(PROFILE_FILE)' or open a new login session to use $(APP_ID) from this shell."; ;; esac
+
+uninstall-app:
+	rm -f "$(BIN_FILE)" "$(DESKTOP_FILE)" "$(ICON_FILE)" "$(PIXMAP_FILE)"
+	update-desktop-database "$(DESKTOP_DIR)" >/dev/null 2>&1 || true
+	gtk-update-icon-cache "$(HOME)/.local/share/icons/hicolor" >/dev/null 2>&1 || true
+	@echo "Removed $(APP_ID) CLI launcher, desktop entry, and installed icon files."
+	@echo "Left repo files, logs, venv, Proton downloads, and user data untouched."
 
 run:
 	@mkdir -p "$(LOG_DIR)"
