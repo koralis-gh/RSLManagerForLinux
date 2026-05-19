@@ -31,6 +31,14 @@ def get_default_prefix() -> Path:
     return get_prefix_root() / "raid1"
 
 
+def get_repo_root() -> Path:
+    return Path(__file__).resolve().parent
+
+
+def get_app_log_path() -> Path:
+    return get_repo_root() / "logs" / f"{APP_NAME}.log"
+
+
 def get_user_config_dir() -> Path:
     """Return the per-user app directory for Linux or Windows."""
     if os.name == "nt":

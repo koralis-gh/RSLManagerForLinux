@@ -22,7 +22,7 @@ PLARIUM_URL = "https://plarium.com/en/plarium-play/"
 PROTON_GE_URL = "https://github.com/GloriousEggroll/proton-ge-custom/releases/download/GE-Proton10-10/GE-Proton10-10.tar.gz"
 APP_ICON_PATH = Path(__file__).resolve().parent / "img" / "rsl-icon.png"
 APP_BANNER_PATH = Path(__file__).resolve().parent / "img" / "rsl-banner.png"
-APP_LOG_PATH = Path(__file__).resolve().parent / "logs" / "RSLManagerForLinux.log"
+APP_LOG_PATH = config_module.get_app_log_path()
 
 
 class RSLManagerApp(ctk.CTk):
