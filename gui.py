@@ -1,11 +1,15 @@
+import io
 import json
 import os
 import subprocess
+import threading
 import webbrowser
 from pathlib import Path
 from typing import Any, Dict, List
 
 import customtkinter as ctk
+import tkinter as tk
+from PIL import Image
 from tkinter import filedialog, messagebox
 
 import config as config_module
@@ -15,28 +19,104 @@ REFRESH_MS_DEFAULT = 1000
 PROMO_CODE_URL = "https://raid-promo-link-finder.vercel.app/"
 CHAMPION_INFO_URL = "https://rsl-x.vercel.app/tools/champions-index"
 PLARIUM_URL = "https://plarium.com/en/plarium-play/"
-WINE_HELP_URL = "https://wiki.winehq.org/Download"
+PROTON_GE_URL = "https://github.com/GloriousEggroll/proton-ge-custom/releases/download/GE-Proton10-10/GE-Proton10-10.tar.gz"
+APP_ICON_PATH = Path(__file__).resolve().parent / "img" / "rsl-icon.png"
+APP_BANNER_PATH = Path(__file__).resolve().parent / "img" / "rsl-banner.png"
 
 
 class RSLManagerApp(ctk.CTk):
     def __init__(self) -> None:
-        super().__init__()
+        super().__init__(className="RSLManagerForLinux")
         self.title("RSLManagerForLinux")
-        self.geometry("900x700")
-        self.minsize(840, 620)
+        self.geometry("980x760")
+        self.minsize(900, 680)
+        self._set_window_icon()
 
         ctk.set_appearance_mode("dark")
         ctk.set_default_color_theme("blue")
 
         self.config_data: Dict[str, Any] = {}
         self.config_messages: List[str] = []
-        self.wine_available = False
+        self.proton_available = False
         self.refresh_interval_ms = REFRESH_MS_DEFAULT
         self.process_refresh_job = None
+        self.last_process_signature: tuple[tuple[int, ...], tuple[int, ...], bool] | None = None
+        self.launch_in_progress = False
+        self.launch_button_reset_job = None
+        self.config_mtime = 0.0
+        self.proton_progress_window = None
+        self.proton_progress_bar = None
+        self.proton_progress_label = None
+        self.header_icon_image = self._load_header_icon_image(max_size=150)
+        self.header_banner_source = self._load_header_banner_source()
+        self.header_banner_image = self._resize_header_banner_image(1000)
+        self.last_banner_width = 0
 
         self._create_widgets()
         self._load_config()
         self._refresh_state()
+
+    def _set_window_icon(self) -> None:
+        if not APP_ICON_PATH.exists():
+            return
+
+        try:
+            self.icon_image = tk.PhotoImage(file=str(APP_ICON_PATH))
+            self.iconphoto(True, self.icon_image)
+        except tk.TclError:
+            self.icon_image = None
+
+    def _load_header_icon_image(self, max_size: int) -> tk.PhotoImage | None:
+        if not APP_ICON_PATH.exists():
+            return None
+
+        try:
+            image = tk.PhotoImage(file=str(APP_ICON_PATH))
+        except tk.TclError:
+            return None
+
+        largest_side = max(image.width(), image.height())
+        scale = max(1, -(-largest_side // max_size))
+        return image.subsample(scale, scale)
+
+    def _load_header_banner_source(self) -> Image.Image | None:
+        if not APP_BANNER_PATH.exists():
+            return None
+
+        try:
+            return Image.open(APP_BANNER_PATH).convert("RGBA")
+        except OSError:
+            return None
+
+    def _resize_header_banner_image(self, target_width: int) -> tk.PhotoImage | None:
+        if self.header_banner_source is None:
+            return None
+
+        source_width, source_height = self.header_banner_source.size
+        width = max(320, min(target_width, source_width))
+        height = max(1, round(source_height * (width / source_width)))
+        resized = self.header_banner_source.resize((width, height), Image.Resampling.LANCZOS)
+
+        buffer = io.BytesIO()
+        resized.save(buffer, format="PNG")
+        return tk.PhotoImage(data=buffer.getvalue())
+
+    def _resize_header_banner_to_frame(self, event: tk.Event | None = None) -> None:
+        frame_width = self.header_frame.winfo_width()
+        if frame_width <= 1:
+            return
+
+        target_width = max(320, frame_width - 24)
+        if abs(target_width - self.last_banner_width) < 16:
+            return
+
+        banner_image = self._resize_header_banner_image(target_width)
+        if banner_image is None:
+            return
+
+        self.last_banner_width = target_width
+        self.header_banner_image = banner_image
+        self.banner_label.configure(image=self.header_banner_image)
 
     def _create_widgets(self) -> None:
         # Configure main layout grid
@@ -46,19 +126,31 @@ class RSLManagerApp(ctk.CTk):
         # Header frame and title area
         self.header_frame = ctk.CTkFrame(self, fg_color="#1a1a1a")
         self.header_frame.grid(row=0, column=0, sticky="nsew", padx=16, pady=(16, 8))
-        self.header_frame.grid_columnconfigure(1, weight=1)
+        self.header_frame.grid_columnconfigure(0, weight=1)
+        self.header_frame.bind("<Configure>", self._resize_header_banner_to_frame)
 
-        self.title_label = ctk.CTkLabel(self.header_frame, text="RSLManagerForLinux", font=ctk.CTkFont(size=24, weight="bold"))
-        self.title_label.grid(row=0, column=0, sticky="w", padx=(12, 0), pady=12)
+        self.banner_label = tk.Label(
+            self.header_frame,
+            image=self.header_banner_image,
+            bg="#1a1a1a",
+            borderwidth=0,
+            highlightthickness=0,
+        )
+        self.banner_label.grid(row=0, column=0, sticky="w", padx=12, pady=(12, 6))
 
         # Promo and helper buttons
         self.button_frame = ctk.CTkFrame(self.header_frame, fg_color="transparent")
-        self.button_frame.grid(row=0, column=1, sticky="e", padx=(0, 12), pady=12)
+        self.button_frame.grid(row=1, column=0, sticky="ew", padx=8, pady=(0, 12))
+        self.button_frame.grid_columnconfigure((0, 1, 2), weight=1)
 
         self.promo_button = ctk.CTkButton(self.button_frame, text="Promo Code Chooser", command=lambda: webbrowser.open(PROMO_CODE_URL), width=170)
-        self.promo_button.grid(row=0, column=0, padx=4)
+        self.promo_button.grid(row=0, column=0, padx=4, pady=3, sticky="ew")
         self.champion_button = ctk.CTkButton(self.button_frame, text="Champion Info", command=lambda: webbrowser.open(CHAMPION_INFO_URL), width=140)
-        self.champion_button.grid(row=0, column=1, padx=4)
+        self.champion_button.grid(row=0, column=1, padx=4, pady=3, sticky="ew")
+        self.edit_config_button = ctk.CTkButton(self.button_frame, text="Edit Config", command=self._show_setup_frame)
+        self.edit_config_button.grid(row=0, column=2, padx=4, pady=3, sticky="ew")
+        self.new_raid_button = ctk.CTkButton(self.button_frame, text="New Raid Process", command=self._start_new_process)
+        self.new_raid_button.grid(row=1, column=0, columnspan=3, padx=4, pady=3, sticky="ew")
 
         # Main content area containing setup and process pages
         self.content_frame = ctk.CTkFrame(self, fg_color="#111111")
@@ -82,64 +174,68 @@ class RSLManagerApp(ctk.CTk):
         self.setup_scroll = ctk.CTkScrollableFrame(self.setup_frame, fg_color="#1a1a1a")
         self.setup_scroll.grid(row=0, column=0, sticky="nsew", padx=20, pady=20)
         self.setup_scroll.grid_columnconfigure(0, weight=1)
-        self.setup_scroll.grid_rowconfigure(8, weight=1)
+        self.setup_scroll.grid_rowconfigure(6, weight=1)
 
         title = ctk.CTkLabel(self.setup_scroll, text="Setup / Config", font=ctk.CTkFont(size=20, weight="bold"))
         title.grid(row=0, column=0, sticky="w", pady=(0, 12))
 
-        self.setup_info_label = ctk.CTkLabel(self.setup_scroll, text="Please provide the Plarium executable and Wine prefix.", wraplength=760, justify="left")
+        self.setup_info_label = ctk.CTkLabel(self.setup_scroll, text="Please provide the Raid setup executable.", wraplength=760, justify="left")
         self.setup_info_label.grid(row=1, column=0, sticky="w", pady=(0, 16))
 
-        # Plarium executable selection
-        self.game_path_entry = ctk.CTkEntry(self.setup_scroll, placeholder_text="Path to plarium.exe")
+        # Raid setup executable selection
+        self.game_path_entry = ctk.CTkEntry(self.setup_scroll, placeholder_text="Path to RaidSetup.exe")
         self.game_path_entry.grid(row=2, column=0, sticky="ew", pady=(0, 6))
-        self.choose_game_button = ctk.CTkButton(self.setup_scroll, text="Browse plarium.exe", command=self._browse_game_exe)
-        self.choose_game_button.grid(row=3, column=0, sticky="w", pady=(0, 12))
 
-        # Wine prefix selection
-        self.prefix_entry = ctk.CTkEntry(self.setup_scroll, placeholder_text="Wine prefix path")
-        self.prefix_entry.grid(row=4, column=0, sticky="ew", pady=(0, 6))
-        self.choose_prefix_button = ctk.CTkButton(self.setup_scroll, text="Browse wine prefix", command=self._browse_wine_prefix)
-        self.choose_prefix_button.grid(row=5, column=0, sticky="w", pady=(0, 12))
+        button_row = ctk.CTkFrame(self.setup_scroll, fg_color="transparent")
+        button_row.grid(row=3, column=0, sticky="w", pady=(0, 12))
+        self.choose_game_button = ctk.CTkButton(button_row, text="Browse RaidSetup.exe", command=self._browse_game_exe)
+        self.choose_game_button.grid(row=0, column=0, padx=(0, 4))
 
         # Prefix scanning helper
         self.scan_prefix_button = ctk.CTkButton(self.setup_scroll, text="Scan for existing RSLManagerForLinux prefixes", command=self._scan_prefixes)
-        self.scan_prefix_button.grid(row=6, column=0, sticky="w", pady=(0, 12))
+        self.scan_prefix_button.grid(row=4, column=0, sticky="w", pady=(0, 12))
 
         # Raw JSON config editor
         self.raw_config_label = ctk.CTkLabel(self.setup_scroll, text="Raw config JSON", font=ctk.CTkFont(size=16, weight="bold"))
-        self.raw_config_label.grid(row=7, column=0, sticky="w", pady=(12, 6))
+        self.raw_config_label.grid(row=5, column=0, sticky="w", pady=(12, 6))
 
-        self.raw_config_box = ctk.CTkTextbox(self.setup_scroll, width=760, height=120)
-        self.raw_config_box.grid(row=8, column=0, sticky="nsew", pady=(0, 12))
+        self.raw_config_box = ctk.CTkTextbox(self.setup_scroll, width=760, height=95)
+        self.raw_config_box.grid(row=6, column=0, sticky="nsew", pady=(0, 12))
 
         self.apply_json_button = ctk.CTkButton(self.setup_scroll, text="Apply JSON", command=self._apply_json)
-        self.apply_json_button.grid(row=9, column=0, sticky="w", pady=(0, 12))
+        self.apply_json_button.grid(row=7, column=0, sticky="w", pady=(0, 12))
+
+        self.reload_config_button = ctk.CTkButton(self.setup_scroll, text="Reload Config", command=self._reload_config)
+        self.reload_config_button.grid(row=8, column=0, sticky="w", pady=(0, 12))
 
         # Main setup action buttons
-        button_row = ctk.CTkFrame(self.setup_scroll, fg_color="transparent")
-        button_row.grid(row=10, column=0, sticky="ew", pady=(0, 12))
-        button_row.grid_columnconfigure((0, 1, 2, 3), weight=1)
+        action_row = ctk.CTkFrame(self.setup_scroll, fg_color="transparent")
+        action_row.grid(row=9, column=0, sticky="ew", pady=(0, 12))
+        action_row.grid_columnconfigure((0, 1, 2, 3), weight=1)
 
-        self.create_config_button = ctk.CTkButton(button_row, text="Create Config", command=self._save_config)
+        self.create_config_button = ctk.CTkButton(action_row, text="Create Config", command=self._save_config)
         self.create_config_button.grid(row=0, column=0, padx=4, pady=4, sticky="ew")
-        self.get_plarium_button = ctk.CTkButton(button_row, text="Get Plarium", command=lambda: webbrowser.open(PLARIUM_URL))
+        self.get_plarium_button = ctk.CTkButton(action_row, text="Get Plarium", command=lambda: webbrowser.open(PLARIUM_URL))
         self.get_plarium_button.grid(row=0, column=1, padx=4, pady=4, sticky="ew")
-        self.get_wine_button = ctk.CTkButton(button_row, text="Get Wine", command=lambda: webbrowser.open(WINE_HELP_URL))
-        self.get_wine_button.grid(row=0, column=2, padx=4, pady=4, sticky="ew")
-        self.open_config_button = ctk.CTkButton(button_row, text="Browse config", command=self._open_config_file)
+        self.get_proton_button = ctk.CTkButton(action_row, text="Install Proton GE", command=self._install_proton)
+        self.get_proton_button.grid(row=0, column=2, padx=4, pady=4, sticky="ew")
+        self.open_config_button = ctk.CTkButton(action_row, text="Browse config", command=self._open_config_file)
         self.open_config_button.grid(row=0, column=3, padx=4, pady=4, sticky="ew")
 
         # Setup status and validation messages
-        self.setup_status_label = ctk.CTkLabel(self.setup_scroll, text="", wraplength=760, justify="left")
-        self.setup_status_label.grid(row=11, column=0, sticky="w", pady=(8, 0))
+        self.setup_status_label = ctk.CTkLabel(
+            self.setup_scroll,
+            text="",
+            wraplength=760,
+            justify="left",
+            font=ctk.CTkFont(size=15, weight="bold"),
+        )
+        self.setup_status_label.grid(row=10, column=0, sticky="w", pady=(8, 0))
 
     def _create_process_frame(self) -> None:
         self.process_frame.grid(row=0, column=0, sticky="nsew")
         self.process_frame.grid_columnconfigure(0, weight=1)
-        self.process_frame.grid_rowconfigure(0, weight=1)
         self.process_frame.grid_rowconfigure(2, weight=1)
-        self.process_frame.grid_rowconfigure(3, weight=1)
 
         # Process page header and status message
         header_label = ctk.CTkLabel(self.process_frame, text="Raid process dashboard", font=ctk.CTkFont(size=20, weight="bold"))
@@ -148,20 +244,8 @@ class RSLManagerApp(ctk.CTk):
         self.process_status_label = ctk.CTkLabel(self.process_frame, text="", wraplength=760, justify="left")
         self.process_status_label.grid(row=1, column=0, sticky="w", padx=20, pady=(0, 12))
 
-        # Process page action buttons
-        action_row = ctk.CTkFrame(self.process_frame, fg_color="transparent")
-        action_row.grid(row=2, column=0, sticky="ew", padx=20)
-        action_row.grid_columnconfigure((0, 1, 2), weight=1)
-
-        self.new_raid_button = ctk.CTkButton(action_row, text="New Raid Process", command=self._start_new_process)
-        self.new_raid_button.grid(row=0, column=0, padx=4, pady=4, sticky="ew")
-        self.kill_plarium_button = ctk.CTkButton(action_row, text="Kill plarium.exe", command=self._kill_plarium)
-        self.kill_plarium_button.grid(row=0, column=1, padx=4, pady=4, sticky="ew")
-        self.open_config_button_2 = ctk.CTkButton(action_row, text="Browse config", command=self._open_config_file)
-        self.open_config_button_2.grid(row=0, column=2, padx=4, pady=4, sticky="ew")
-
         self.raid_cards_frame = ctk.CTkScrollableFrame(self.process_frame, fg_color="#1a1a1a")
-        self.raid_cards_frame.grid(row=3, column=0, sticky="nsew", padx=20, pady=(12, 20))
+        self.raid_cards_frame.grid(row=2, column=0, sticky="nsew", padx=20, pady=(12, 20))
         self.raid_cards_frame.grid_columnconfigure(0, weight=1)
 
     # Config load and population methods
@@ -173,14 +257,16 @@ class RSLManagerApp(ctk.CTk):
             messagebox.showerror("Config Error", str(exc))
 
         self._populate_setup_fields()
+        self.config_mtime = self._get_config_mtime()
 
     # Setup form population helpers
     def _populate_setup_fields(self) -> None:
         self.game_path_entry.delete(0, "end")
         self.game_path_entry.insert(0, str(self.config_data.get("game_exe_path", "")))
 
-        self.prefix_entry.delete(0, "end")
-        self.prefix_entry.insert(0, str(self.config_data.get("wine_prefix", "")))
+        prefix_path = str(self.config_data.get("prefix_path", ""))
+        if not prefix_path:
+            self.config_data["prefix_path"] = str(config_module.get_default_prefix())
 
         self._refresh_config_text()
 
@@ -190,17 +276,13 @@ class RSLManagerApp(ctk.CTk):
 
     # File browser helpers
     def _browse_game_exe(self) -> None:
-        selected = filedialog.askopenfilename(title="Select plarium.exe")
+        selected = filedialog.askopenfilename(
+            title="Select RaidSetup.exe",
+            initialdir=str(Path.home() / "Downloads"),
+        )
         if selected:
             self.game_path_entry.delete(0, "end")
             self.game_path_entry.insert(0, selected)
-            self._update_config_from_fields()
-
-    def _browse_wine_prefix(self) -> None:
-        selected = filedialog.askdirectory(title="Select Wine prefix")
-        if selected:
-            self.prefix_entry.delete(0, "end")
-            self.prefix_entry.insert(0, selected)
             self._update_config_from_fields()
 
     # JSON config editing helpers
@@ -213,20 +295,54 @@ class RSLManagerApp(ctk.CTk):
             self.config_data = new_config
             self._populate_setup_fields()
             self._save_config_data()
+            self.config_mtime = self._get_config_mtime()
             self._refresh_state()
         except json.JSONDecodeError as exc:
             messagebox.showerror("JSON Error", f"Unable to parse JSON: {exc}")
         except ValueError as exc:
             messagebox.showerror("Config Error", str(exc))
 
+    def _reload_config(self) -> None:
+        try:
+            self.config_data = config_module.load_config()
+        except ValueError as exc:
+            messagebox.showerror("Config Error", str(exc))
+            return
+        self._populate_setup_fields()
+        self.config_mtime = self._get_config_mtime()
+        self._refresh_state()
+
     # Config persistence helpers
     def _save_config_data(self) -> None:
         try:
             config_module.save_config(self.config_data)
+            self.config_mtime = self._get_config_mtime()
         except OSError as exc:
             messagebox.showerror("Save Error", f"Unable to write config: {exc}")
 
+    def _get_config_mtime(self) -> float:
+        config_path = config_module.get_config_path()
+        try:
+            return config_path.stat().st_mtime
+        except OSError:
+            return 0.0
+
+    def _has_config_changed_on_disk(self) -> bool:
+        config_path = config_module.get_config_path()
+        try:
+            current_mtime = config_path.stat().st_mtime
+            return self.config_mtime != 0.0 and current_mtime != self.config_mtime
+        except OSError:
+            return False
+
     def _save_config(self) -> None:
+        if self._has_config_changed_on_disk():
+            messagebox.showwarning(
+                "Config Changed",
+                "The configuration file has changed on disk. Reload it first before saving to avoid overwriting your changes.",
+            )
+            return
+
         self._update_config_from_fields()
         self._save_config_data()
         self._refresh_state()
@@ -234,14 +350,13 @@ class RSLManagerApp(ctk.CTk):
 
     def _update_config_from_fields(self) -> None:
         self.config_data["game_exe_path"] = self.game_path_entry.get().strip()
-        self.config_data["wine_prefix"] = self.prefix_entry.get().strip()
         self._refresh_config_text()
 
-    # Wine prefix scanning helpers
+    # Proton prefix scanning helpers
     def _scan_prefixes(self) -> None:
-        candidates = process_module.scan_existing_prefixes()
+        candidates = config_module.scan_existing_prefixes()
         if not candidates:
-            messagebox.showinfo("Prefix Scan", "No existing RSLManagerForLinux prefixes were found.")
+            messagebox.showinfo("Prefix Scan", "No existing RSLManagerForLinux prefixes were found. A default prefix will be created when you launch Raid.")
             return
 
         if len(candidates) == 1:
@@ -251,8 +366,7 @@ class RSLManagerApp(ctk.CTk):
             messagebox.showinfo("Prefix candidates", dialog_text)
             chosen = candidates[0]
 
-        self.prefix_entry.delete(0, "end")
-        self.prefix_entry.insert(0, chosen)
+        self.config_data["prefix_path"] = chosen
         self._update_config_from_fields()
         self._refresh_state()
 
@@ -264,20 +378,117 @@ class RSLManagerApp(ctk.CTk):
                 os.startfile(config_path)
             else:
                 subprocess.Popen(["xdg-open", str(config_path)])
+            messagebox.showinfo(
+                "Edit Config",
+                "Config file opened. Save any changes and click Reload Config to refresh the app state.",
+            )
         except OSError:
             messagebox.showerror("Open Error", f"Unable to open config file: {config_path}")
 
+    def _install_proton(self) -> None:
+        status = config_module.get_proton_install_status()
+
+        if status["proton_installed"]:
+            self.proton_available = True
+            self._refresh_state()
+            messagebox.showinfo(
+                "Proton GE Ready",
+                "Proton GE is already installed. You can now launch Raid.",
+            )
+            return
+
+        if not status["tarball_exists"]:
+            confirm = messagebox.askyesno(
+                "Download Proton GE",
+                "The Proton GE tarball is missing. Download it now?",
+            )
+            if not confirm:
+                return
+
+        self._show_proton_progress_dialog(status["tarball_exists"])
+
+        def worker() -> None:
+            success, message = config_module.install_proton(progress_callback=self._report_proton_progress)
+            self.after(0, lambda: self._on_proton_install_done(success, message))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _show_proton_progress_dialog(self, using_cached_tarball: bool = False) -> None:
+        if self.proton_progress_window is not None:
+            return
+
+        window = ctk.CTkToplevel(self)
+        window.title("Installing Proton GE")
+        window.geometry("420x120")
+        window.resizable(False, False)
+
+        action_text = "Extracting cached Proton GE..." if using_cached_tarball else "Downloading Proton GE..."
+        label = ctk.CTkLabel(window, text=action_text, anchor="w")
+        label.pack(padx=16, pady=(16, 8), fill="x")
+
+        progress_bar = ctk.CTkProgressBar(window, width=380)
+        progress_bar.set(0.0)
+        progress_bar.pack(padx=16, pady=(0, 10), fill="x")
+
+        status_label = ctk.CTkLabel(window, text="Starting install...", anchor="w")
+        status_label.pack(padx=16, pady=(0, 12), fill="x")
+
+        self.proton_progress_window = window
+        self.proton_progress_bar = progress_bar
+        self.proton_progress_label = status_label
+
+    def _close_proton_progress_dialog(self) -> None:
+        if self.proton_progress_window is not None:
+            self.proton_progress_window.destroy()
+        self.proton_progress_window = None
+        self.proton_progress_bar = None
+        self.proton_progress_label = None
+
+    def _report_proton_progress(self, downloaded: int, total: int) -> None:
+        self.after(0, lambda: self._update_proton_progress(downloaded, total))
+
+    def _update_proton_progress(self, downloaded: int, total: int) -> None:
+        if self.proton_progress_bar is None or self.proton_progress_label is None:
+            return
+
+        if total > 0:
+            progress = min(downloaded / total, 1.0)
+            self.proton_progress_bar.set(progress)
+            self.proton_progress_label.configure(
+                text=f"Downloaded {downloaded // 1024} KiB / {total // 1024} KiB"
+            )
+        else:
+            self.proton_progress_label.configure(text=f"Downloaded {downloaded // 1024} KiB")
+
+    def _on_proton_install_done(self, success: bool, message: str) -> None:
+        self._close_proton_progress_dialog()
+        if not success:
+            detail = config_module.get_proton_install_message()
+            messagebox.showerror(
+                "Proton Install Failed",
+                f"{message}\n\nCurrent install state:\n{detail}",
+            )
+            return
+
+        messagebox.showinfo(
+            "Proton Installed",
+            "Proton GE has been installed into ~/.RSLManagerForLinux/proton. You can now launch Raid.",
+        )
+        self.proton_available = config_module.check_proton_available()
+        self._refresh_state()
+
     # App state refresh helpers
     def _refresh_state(self) -> None:
-        self.wine_available = process_module.check_wine_available()
+        self.proton_available = config_module.check_proton_available()
         valid, messages = config_module.validate_config(self.config_data)
         self.config_messages = messages
-        if not self.wine_available:
-            self._show_setup_frame("Wine not detected. Please install Wine or fix your PATH.")
+        if not self.proton_available:
+            prefix_path = self.config_data.get("prefix_path", "")
+            self._show_setup_frame(config_module.get_proton_install_message(prefix_path))
             return
 
         if not valid:
-            self._show_setup_frame("Config must have game_exe_path and wine_prefix set.")
+            self._show_setup_frame("Config must have game_exe_path and prefix_path set.")
             return
 
         self._show_process_frame()
@@ -287,46 +498,95 @@ class RSLManagerApp(ctk.CTk):
     def _show_setup_frame(self, status_text: str = "") -> None:
         self.process_frame.grid_remove()
         self.setup_frame.grid()
-        self.setup_status_label.configure(text=status_text)
+        self.new_raid_button.configure(state="disabled", text="New Raid Process")
+        self.edit_config_button.configure(state="disabled")
+        if "Proton" in status_text:
+            self.setup_status_label.configure(text=status_text, text_color="#ffb86c")
+        else:
+            self.setup_status_label.configure(text=status_text, text_color=None)
         if self.config_messages:
             self.setup_status_label.configure(text=status_text + "\n" + "\n".join(self.config_messages))
 
     def _show_process_frame(self) -> None:
         self.setup_frame.grid_remove()
         self.process_frame.grid()
+        if not self.launch_in_progress:
+            self.new_raid_button.configure(state="normal", text="New Raid Process")
+        self.edit_config_button.configure(state="normal")
 
     # Process list refresh and UI update
     def _refresh_process_status(self) -> None:
-        self.raid_cards_frame.destroy()
-        self.raid_cards_frame = ctk.CTkScrollableFrame(self.process_frame, fg_color="#1a1a1a")
-        self.raid_cards_frame.grid(row=3, column=0, sticky="nsew", padx=20, pady=(12, 20))
-        self.raid_cards_frame.grid_columnconfigure(0, weight=1)
-
         raid_procs = process_module.get_raid_processes()
         plarium_procs = process_module.get_plarium_processes()
-        self.wine_available = process_module.check_wine_available()
+        self.proton_available = config_module.check_proton_available()
 
-        if not raid_procs:
+        process_signature = (
+            tuple(proc["pid"] for proc in raid_procs),
+            tuple(proc["pid"] for proc in plarium_procs),
+            self.launch_in_progress,
+        )
+        if process_signature == self.last_process_signature:
+            self.process_refresh_job = self.after(self.refresh_interval_ms, self._refresh_process_status)
+            return
+
+        self.last_process_signature = process_signature
+
+        self.raid_cards_frame.destroy()
+        self.raid_cards_frame = ctk.CTkScrollableFrame(self.process_frame, fg_color="#1a1a1a")
+        self.raid_cards_frame.grid(row=2, column=0, sticky="nsew", padx=20, pady=(12, 20))
+        self.raid_cards_frame.grid_columnconfigure(0, weight=1)
+
+        if self.launch_in_progress and not raid_procs:
+            self.process_status_label.configure(text="Opening Raid in the background...")
+        elif plarium_procs and raid_procs:
+            self.process_status_label.configure(text=f"{len(raid_procs)} Raid process(es) detected; Plarium launcher activity is running")
+        elif plarium_procs:
+            self.process_status_label.configure(text="Plarium launcher activity is running")
+        elif not raid_procs:
             self.process_status_label.configure(text="No Raid processes currently running")
         else:
             self.process_status_label.configure(text=f"{len(raid_procs)} Raid process(es) detected")
 
+        row_index = 0
         if plarium_procs:
-            self.kill_plarium_button.configure(state="normal")
-        else:
-            self.kill_plarium_button.configure(state="disabled")
+            self._add_plarium_card(plarium_procs, row_index)
+            row_index += 1
 
         for index, proc in enumerate(raid_procs, start=1):
-            self._add_raid_card(index, proc)
+            self._add_raid_card(index, proc, row_index)
+            row_index += 1
 
         if self.process_refresh_job is not None:
             self.after_cancel(self.process_refresh_job)
         self.process_refresh_job = self.after(self.refresh_interval_ms, self._refresh_process_status)
 
     # Raid process card creation helpers
-    def _add_raid_card(self, index: int, proc: Dict[str, Any]) -> None:
+    def _add_plarium_card(self, procs: List[Dict[str, Any]], row_index: int) -> None:
+        card = ctk.CTkFrame(self.raid_cards_frame, fg_color="#252018")
+        card.grid(row=row_index, column=0, sticky="ew", pady=8, padx=8)
+        card.grid_columnconfigure(1, weight=1)
+
+        main_proc = self._choose_main_plarium_process(procs)
+
+        label = ctk.CTkLabel(card, text="Plarium Launcher", font=ctk.CTkFont(size=16, weight="bold"))
+        label.grid(row=0, column=0, sticky="w", padx=12, pady=(10, 2))
+
+        pid_label = ctk.CTkLabel(card, text=f"PID: {main_proc['pid']}")
+        pid_label.grid(row=0, column=1, sticky="w", padx=12)
+
+        exit_button = ctk.CTkButton(card, text="Exit", width=120, command=self._exit_plarium_processes)
+        exit_button.grid(row=0, column=2, sticky="e", padx=12)
+
+    def _choose_main_plarium_process(self, procs: List[Dict[str, Any]]) -> Dict[str, Any]:
+        for proc in procs:
+            cmdline = proc.get("cmdline", "").lower()
+            if "plariumplay.exe" in cmdline and "--type=" not in cmdline:
+                return proc
+        return procs[0]
+
+    def _add_raid_card(self, index: int, proc: Dict[str, Any], row_index: int) -> None:
         card = ctk.CTkFrame(self.raid_cards_frame, fg_color="#1f1f1f")
-        card.grid(row=index - 1, column=0, sticky="ew", pady=8, padx=8)
+        card.grid(row=row_index, column=0, sticky="ew", pady=8, padx=8)
         card.grid_columnconfigure(1, weight=1)
 
         label = ctk.CTkLabel(card, text=f"Raid Process {index}", font=ctk.CTkFont(size=16, weight="bold"))
@@ -342,32 +602,42 @@ class RSLManagerApp(ctk.CTk):
     def _start_new_process(self) -> None:
         self._update_config_from_fields()
         self._save_config_data()
-        if not self.wine_available:
-            messagebox.showwarning("Wine Missing", "Wine is not available. Install Wine first.")
+        if not self.proton_available:
+            messagebox.showwarning("Proton Missing", "Proton GE is not available. Install it first.")
             return
 
-        plarium_procs = process_module.get_plarium_processes()
-        for proc in plarium_procs:
+        self._set_launch_in_progress()
+        for proc in process_module.get_plarium_processes():
             process_module.kill_process(proc["pid"])
 
-        success, message = process_module.launch_plarium(
-            self.config_data["game_exe_path"], self.config_data["wine_prefix"]
+        success, message = process_module.launch_raid(
+            self.config_data["game_exe_path"], self.config_data["prefix_path"]
         )
         if not success:
             messagebox.showerror("Launch Failed", message)
         self._refresh_process_status()
 
-    def _kill_plarium(self) -> None:
-        plarium_procs = process_module.get_plarium_processes()
-        if not plarium_procs:
-            messagebox.showinfo("No Process", "No plarium.exe process was found.")
-            return
-        for proc in plarium_procs:
-            process_module.kill_process(proc["pid"])
+    def _set_launch_in_progress(self) -> None:
+        self.launch_in_progress = True
+        self.new_raid_button.configure(state="disabled", text="Opening...")
+        self.process_status_label.configure(text="Opening Raid in the background...")
+        if self.launch_button_reset_job is not None:
+            self.after_cancel(self.launch_button_reset_job)
+        self.launch_button_reset_job = self.after(6000, self._reset_launch_button)
+
+    def _reset_launch_button(self) -> None:
+        self.launch_in_progress = False
+        self.launch_button_reset_job = None
+        self.new_raid_button.configure(state="normal", text="New Raid Process")
         self._refresh_process_status()
 
     def _exit_raid_process(self, pid: int) -> None:
         process_module.kill_process(pid)
+        self._refresh_process_status()
+
+    def _exit_plarium_processes(self) -> None:
+        for proc in process_module.get_plarium_processes():
+            process_module.kill_process(proc["pid"])
         self._refresh_process_status()
 
 

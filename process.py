@@ -2,20 +2,9 @@ import os
 import signal
 import subprocess
 from pathlib import Path
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List
 
-
-def check_wine_available() -> bool:
-    try:
-        result = subprocess.run(
-            ["wine", "--version"],
-            capture_output=True,
-            text=True,
-            timeout=5,
-        )
-        return result.returncode == 0
-    except (FileNotFoundError, subprocess.SubprocessError):
-        return False
+import config as config_module
 
 
 def _read_cmdline(pid: int) -> str:
@@ -66,12 +55,26 @@ def _matches_process(proc: Dict[str, Any], keywords: List[str]) -> bool:
     return False
 
 
-def get_plarium_processes() -> List[Dict[str, Any]]:
-    return [proc for proc in _list_linux_processes() if _matches_process(proc, ["plarium.exe", "plariumplay.exe"])]
-
-
 def get_raid_processes() -> List[Dict[str, Any]]:
     return [proc for proc in _list_linux_processes() if _matches_process(proc, ["raid.exe"])]
+
+
+def get_plarium_processes() -> List[Dict[str, Any]]:
+    procs: List[Dict[str, Any]] = []
+    for proc in _list_linux_processes():
+        comm = proc.get("comm", "").lower()
+        cmdline = proc.get("cmdline", "").lower()
+        if "raid.exe" in comm or "raid.exe" in cmdline:
+            continue
+
+        is_plarium_process = (
+            comm.startswith("plarium")
+            or "plariumplay.exe" in cmdline
+            or "plariumplayclientservice.exe" in cmdline
+        )
+        if is_plarium_process:
+            procs.append(proc)
+    return procs
 
 
 def kill_process(pid: int, sig: int = signal.SIGTERM) -> bool:
@@ -82,41 +85,52 @@ def kill_process(pid: int, sig: int = signal.SIGTERM) -> bool:
         return False
 
 
-def launch_plarium(game_exe_path: str, wine_prefix: str) -> Tuple[bool, str]:
+def launch_raid(game_exe_path: str, prefix_path: str) -> tuple[bool, str]:
     path = Path(game_exe_path).expanduser()
-    wine_prefix_path = Path(wine_prefix).expanduser()
+    prefix = Path(prefix_path).expanduser()
+    proton_bin = config_module._find_proton_bin()
+
+    if proton_bin is None:
+        return False, "Proton is not installed. Please install Proton GE first."
+
     if not path.exists():
-        return False, f"Game executable not found: {path}"
+        return False, f"Setup executable not found: {path}"
+
+    prefix.mkdir(parents=True, exist_ok=True)
+    config_module.get_steam_dummy_path().mkdir(parents=True, exist_ok=True)
+
+    # Look for an already-installed raid.exe
+    installed_exe = _find_installed_executable(prefix)
+    exe_to_run = installed_exe if installed_exe is not None else path
+
+    if not exe_to_run.exists():
+        return False, f"Executable not found: {exe_to_run}"
 
     env = os.environ.copy()
-    env["WINEPREFIX"] = str(wine_prefix_path)
+    env["STEAM_COMPAT_DATA_PATH"] = str(prefix)
+    env["STEAM_COMPAT_CLIENT_INSTALL_PATH"] = str(config_module.get_steam_dummy_path())
+
     try:
         subprocess.Popen(
-            ["wine", str(path)],
+            [str(proton_bin), "run", str(exe_to_run)],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             env=env,
+            cwd=exe_to_run.parent,
         )
         return True, ""
     except FileNotFoundError:
-        return False, "wine executable not found on PATH"
+        return False, "Proton binary not found"
     except OSError as exc:
         return False, str(exc)
 
 
-def scan_existing_prefixes() -> List[str]:
-    home = Path.home()
-    candidates: List[str] = []
-    search_paths = [home / ".wine", home / ".local" / "share" / "wineprefixes"]
-    for root in search_paths:
-        if not root.exists():
-            continue
-        for child in root.iterdir():
-            if not child.is_dir():
-                continue
-            prefix_candidate = child
-            if (prefix_candidate / "drive_c" / "Program Files" / "PlariumPlay" / "PlariumPlay.exe").exists():
-                candidates.append(str(prefix_candidate))
-            elif prefix_candidate.name.lower().startswith("rsl"):
-                candidates.append(str(prefix_candidate))
-    return candidates
+def _find_installed_executable(prefix_path: Path) -> Path | None:
+    drive_c = prefix_path / "pfx" / "drive_c"
+    if not drive_c.exists():
+        return None
+
+    for path in drive_c.rglob("raid.exe"):
+        if path.is_file():
+            return path
+    return None
