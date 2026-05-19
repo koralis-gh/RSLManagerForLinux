@@ -15,13 +15,15 @@ BIN_FILE := $(BIN_DIR)/$(APP_ID)
 DESKTOP_FILE := $(DESKTOP_DIR)/$(APP_ID).desktop
 ICON_FILE := $(ICON_DIR)/$(APP_ID).png
 PIXMAP_FILE := $(PIXMAP_DIR)/$(APP_ID).png
+APT_I386_PKGS := libc6:i386 libstdc++6:i386 libgcc-s1:i386 libfreetype6:i386 libfontconfig1:i386 libx11-6:i386 libxext6:i386 libxrender1:i386 libxi6:i386 libxrandr2:i386 libxcursor1:i386 libxcomposite1:i386 libxdamage1:i386 libxfixes3:i386 libgl1:i386 libegl1:i386
+DNF_I686_PKGS := glibc.i686 libstdc++.i686 libgcc.i686 freetype.i686 fontconfig.i686 libX11.i686 libXext.i686 libXrender.i686 libXi.i686 libXrandr.i686 libXcursor.i686 libXcomposite.i686 libXdamage.i686 libXfixes.i686 mesa-libGL.i686 mesa-libEGL.i686
 
 check-prereqs:
 	@set -e; \
 	missing=""; \
 	if command -v apt >/dev/null 2>&1; then pm="apt"; elif command -v dnf >/dev/null 2>&1; then pm="dnf"; else pm=""; fi; \
-	apt_i386_pkgs="libc6:i386 libstdc++6:i386 libgcc-s1:i386 libfreetype6:i386 libfontconfig1:i386 libx11-6:i386 libxext6:i386 libxrender1:i386 libxi6:i386 libxrandr2:i386 libxcursor1:i386 libxcomposite1:i386 libxdamage1:i386 libxfixes3:i386 libgl1:i386 libegl1:i386"; \
-	dnf_i686_pkgs="glibc.i686 libstdc++.i686 libgcc.i686 freetype.i686 fontconfig.i686 libX11.i686 libXext.i686 libXrender.i686 libXi.i686 libXrandr.i686 libXcursor.i686 libXcomposite.i686 libXdamage.i686 libXfixes.i686 mesa-libGL.i686 mesa-libEGL.i686"; \
+	apt_i386_pkgs="$(APT_I386_PKGS)"; \
+	dnf_i686_pkgs="$(DNF_I686_PKGS)"; \
 	if ! command -v python3 >/dev/null 2>&1; then missing="$$missing python3"; fi; \
 	PYVER=""; \
 	if command -v python3 >/dev/null 2>&1; then PYVER=$$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")'); fi; \
@@ -106,3 +108,24 @@ run:
 
 check:
 	@if [ -x "$(PYTHON)" ]; then "$(PYTHON)" -m py_compile config.py process.py gui.py; else python3 -m py_compile config.py process.py gui.py; fi
+
+diagnose:
+	@echo "RSLManagerForLinux diagnostics"
+	@echo "Repo: $(APP_DIR)"
+	@echo "Python: $$(command -v python3 || true)"
+	@python3 -c 'import tkinter; print("Tkinter: ok")' 2>/dev/null || echo "Tkinter: missing"
+	@echo "Venv python: $$([ -x "$(PYTHON)" ] && echo "$(PYTHON)" || echo "missing")"
+	@echo "Proton: $$([ -x "$(HOME)/.RSLManagerForLinux/proton/proton" ] && echo "$(HOME)/.RSLManagerForLinux/proton/proton" || echo "missing")"
+	@if command -v apt >/dev/null 2>&1; then \
+		echo "Package manager: apt"; \
+		for pkg in $(APT_I386_PKGS); do \
+			if dpkg-query -W -f='$${Status}' "$$pkg" 2>/dev/null | grep -q "install ok installed"; then echo "$$pkg: ok"; else echo "$$pkg: missing"; fi; \
+		done; \
+	elif command -v dnf >/dev/null 2>&1; then \
+		echo "Package manager: dnf"; \
+		for pkg in $(DNF_I686_PKGS); do \
+			if rpm -q "$$pkg" >/dev/null 2>&1; then echo "$$pkg: ok"; else echo "$$pkg: missing"; fi; \
+		done; \
+	else \
+		echo "Package manager: unknown"; \
+	fi

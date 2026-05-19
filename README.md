@@ -83,3 +83,13 @@ make check
 ```
 
 This compiles the Python files and uses the local `.venv` Python if it exists.
+
+## Diagnostics
+
+If Proton starts but the Plarium installer crashes, run:
+
+```bash
+make diagnose
+```
+
+This prints whether the local venv, Tkinter, Proton, and required 32-bit Wine/Proton runtime packages are present. A repeated log message like `Wine cannot find the FreeType font library` means the 32-bit FreeType/fontconfig packages are still missing or were not installed for the VM you are testing in.
