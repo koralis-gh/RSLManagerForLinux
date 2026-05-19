@@ -12,6 +12,10 @@ venv/
 *.json
 !context/*.json
 
+# logs
+logs/
+*.log
+
 # IDE / editor
 .vscode/
 *.swp

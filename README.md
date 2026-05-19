@@ -4,13 +4,13 @@ RSLManagerForLinux is a lightweight Linux launcher and process manager for Raid:
 
 ## Prerequisites
 
-You need Python, Tkinter, venv support, pip, make, and common desktop integration tools.
+You need Python, Tkinter, venv support, pip, make, `wmctrl`, and common desktop integration tools. `wmctrl` is used to focus the existing app window instead of opening a second copy.
 
 On Debian or Ubuntu:
 
 ```bash
 sudo apt update
-sudo apt install python3 python3-venv python3-tk python3-pip make desktop-file-utils gtk-update-icon-cache
+sudo apt install python3 python3-venv python3-tk python3-pip make wmctrl desktop-file-utils gtk-update-icon-cache
 ```
 
 If your distro package set does not include `gtk-update-icon-cache` by that name, install the GTK icon theme tools package for your distribution. The installer will continue if the icon cache tool is missing.
@@ -18,7 +18,7 @@ If your distro package set does not include `gtk-update-icon-cache` by that name
 On Fedora:
 
 ```bash
-sudo dnf install python3 python3-tkinter python3-pip make desktop-file-utils gtk-update-icon-cache
+sudo dnf install python3 python3-tkinter python3-pip make wmctrl desktop-file-utils gtk-update-icon-cache
 ```
 
 On Fedora, Python venv support is normally included with Python.
@@ -67,8 +67,10 @@ make run
 Logs from `make run` are written to:
 
 ```text
-/tmp/RSLManagerForLinux.log
+logs/RSLManagerForLinux.log
 ```
+
+The installed app launcher also writes launch attempts, focus attempts, and startup failures to that same repo-local log file.
 
 ## Development Check
 

@@ -22,6 +22,7 @@ PLARIUM_URL = "https://plarium.com/en/plarium-play/"
 PROTON_GE_URL = "https://github.com/GloriousEggroll/proton-ge-custom/releases/download/GE-Proton10-10/GE-Proton10-10.tar.gz"
 APP_ICON_PATH = Path(__file__).resolve().parent / "img" / "rsl-icon.png"
 APP_BANNER_PATH = Path(__file__).resolve().parent / "img" / "rsl-banner.png"
+APP_LOG_PATH = Path(__file__).resolve().parent / "logs" / "RSLManagerForLinux.log"
 
 
 class RSLManagerApp(ctk.CTk):
@@ -141,7 +142,7 @@ class RSLManagerApp(ctk.CTk):
         # Promo and helper buttons
         self.button_frame = ctk.CTkFrame(self.header_frame, fg_color="transparent")
         self.button_frame.grid(row=1, column=0, sticky="ew", padx=8, pady=(0, 12))
-        self.button_frame.grid_columnconfigure((0, 1, 2), weight=1)
+        self.button_frame.grid_columnconfigure((0, 1, 2, 3), weight=1)
 
         self.promo_button = ctk.CTkButton(self.button_frame, text="Promo Code Chooser", command=lambda: webbrowser.open(PROMO_CODE_URL), width=170)
         self.promo_button.grid(row=0, column=0, padx=4, pady=3, sticky="ew")
@@ -149,8 +150,10 @@ class RSLManagerApp(ctk.CTk):
         self.champion_button.grid(row=0, column=1, padx=4, pady=3, sticky="ew")
         self.edit_config_button = ctk.CTkButton(self.button_frame, text="Edit Config", command=self._show_setup_frame)
         self.edit_config_button.grid(row=0, column=2, padx=4, pady=3, sticky="ew")
+        self.open_log_button = ctk.CTkButton(self.button_frame, text="Open Log", command=self._open_log_file)
+        self.open_log_button.grid(row=0, column=3, padx=4, pady=3, sticky="ew")
         self.new_raid_button = ctk.CTkButton(self.button_frame, text="New Raid Process", command=self._start_new_process)
-        self.new_raid_button.grid(row=1, column=0, columnspan=3, padx=4, pady=3, sticky="ew")
+        self.new_raid_button.grid(row=1, column=0, columnspan=4, padx=4, pady=3, sticky="ew")
 
         # Main content area containing setup and process pages
         self.content_frame = ctk.CTkFrame(self, fg_color="#111111")
@@ -384,6 +387,17 @@ class RSLManagerApp(ctk.CTk):
             )
         except OSError:
             messagebox.showerror("Open Error", f"Unable to open config file: {config_path}")
+
+    def _open_log_file(self) -> None:
+        try:
+            APP_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+            APP_LOG_PATH.touch(exist_ok=True)
+            if os.name == "nt":
+                os.startfile(APP_LOG_PATH)
+            else:
+                subprocess.Popen(["xdg-open", str(APP_LOG_PATH)])
+        except OSError as exc:
+            messagebox.showerror("Open Error", f"Unable to open log file: {APP_LOG_PATH}\n\n{exc}")
 
     def _install_proton(self) -> None:
         status = config_module.get_proton_install_status()
