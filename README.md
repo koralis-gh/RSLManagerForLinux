@@ -4,7 +4,7 @@ RSLManagerForLinux is a lightweight Linux launcher and process manager for Raid:
 
 ## Prerequisites
 
-You need Python, Tkinter, venv support, pip, make, `wmctrl`, common desktop integration tools, and 32-bit runtime libraries for Proton/Wine. `wmctrl` is used to focus the existing app window instead of opening a second copy.
+You need Python, Tkinter, venv support, pip, make, `wmctrl`, common desktop integration tools, and 32-bit runtime/font/graphics libraries for Proton/Wine. `wmctrl` is used to focus the existing app window instead of opening a second copy.
 
 On Debian or Ubuntu:
 
@@ -13,7 +13,7 @@ sudo apt update
 sudo apt install python3 python3-venv python3-tk python3-pip make wmctrl desktop-file-utils gtk-update-icon-cache
 sudo dpkg --add-architecture i386
 sudo apt update
-sudo apt install libc6:i386 libstdc++6:i386 libgcc-s1:i386
+sudo apt install libc6:i386 libstdc++6:i386 libgcc-s1:i386 libfreetype6:i386 libfontconfig1:i386 libx11-6:i386 libxext6:i386 libxrender1:i386 libxi6:i386 libxrandr2:i386 libxcursor1:i386 libxcomposite1:i386 libxdamage1:i386 libxfixes3:i386 libgl1:i386 libegl1:i386
 ```
 
 If your distro package set does not include `gtk-update-icon-cache` by that name, install the GTK icon theme tools package for your distribution. The installer will continue if the icon cache tool is missing.
@@ -22,7 +22,7 @@ On Fedora:
 
 ```bash
 sudo dnf install python3 python3-tkinter python3-pip make wmctrl desktop-file-utils gtk-update-icon-cache
-sudo dnf install glibc.i686 libstdc++.i686 libgcc.i686
+sudo dnf install glibc.i686 libstdc++.i686 libgcc.i686 freetype.i686 fontconfig.i686 libX11.i686 libXext.i686 libXrender.i686 libXi.i686 libXrandr.i686 libXcursor.i686 libXcomposite.i686 libXdamage.i686 libXfixes.i686 mesa-libGL.i686 mesa-libEGL.i686
 ```
 
 On Fedora, Python venv support is normally included with Python.

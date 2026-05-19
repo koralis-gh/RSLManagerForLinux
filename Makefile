@@ -20,12 +20,23 @@ check-prereqs:
 	@set -e; \
 	missing=""; \
 	if command -v apt >/dev/null 2>&1; then pm="apt"; elif command -v dnf >/dev/null 2>&1; then pm="dnf"; else pm=""; fi; \
+	apt_i386_pkgs="libc6:i386 libstdc++6:i386 libgcc-s1:i386 libfreetype6:i386 libfontconfig1:i386 libx11-6:i386 libxext6:i386 libxrender1:i386 libxi6:i386 libxrandr2:i386 libxcursor1:i386 libxcomposite1:i386 libxdamage1:i386 libxfixes3:i386 libgl1:i386 libegl1:i386"; \
+	dnf_i686_pkgs="glibc.i686 libstdc++.i686 libgcc.i686 freetype.i686 fontconfig.i686 libX11.i686 libXext.i686 libXrender.i686 libXi.i686 libXrandr.i686 libXcursor.i686 libXcomposite.i686 libXdamage.i686 libXfixes.i686 mesa-libGL.i686 mesa-libEGL.i686"; \
 	if ! command -v python3 >/dev/null 2>&1; then missing="$$missing python3"; fi; \
 	PYVER=""; \
 	if command -v python3 >/dev/null 2>&1; then PYVER=$$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")'); fi; \
 	if command -v python3 >/dev/null 2>&1 && ! python3 -c 'import tkinter' >/dev/null 2>&1; then missing="$$missing tkinter"; fi; \
 	if ! command -v wmctrl >/dev/null 2>&1; then missing="$$missing wmctrl"; fi; \
 	if [ ! -e /lib/ld-linux.so.2 ] && [ ! -e /lib32/ld-linux.so.2 ] && [ ! -e /lib/i386-linux-gnu/ld-linux.so.2 ]; then missing="$$missing 32-bit-runtime"; fi; \
+	if [ "$$pm" = "apt" ]; then \
+		for pkg in $$apt_i386_pkgs; do \
+			if ! dpkg-query -W -f='$${Status}' "$$pkg" 2>/dev/null | grep -q "install ok installed"; then missing="$$missing $$pkg"; fi; \
+		done; \
+	elif [ "$$pm" = "dnf" ]; then \
+		for pkg in $$dnf_i686_pkgs; do \
+			if ! rpm -q "$$pkg" >/dev/null 2>&1; then missing="$$missing $$pkg"; fi; \
+		done; \
+	fi; \
 	if command -v python3 >/dev/null 2>&1; then \
 		TMPDIR=$$(mktemp -d); \
 		if ! python3 -m venv "$$TMPDIR/venv" >/dev/null 2>&1; then missing="$$missing venv"; fi; \
@@ -35,16 +46,15 @@ check-prereqs:
 		echo "Missing system dependencies:$$missing"; \
 		if [ "$$pm" = "apt" ]; then \
 			pkgs="python3 python3-venv python3-tk python3-pip make wmctrl desktop-file-utils gtk-update-icon-cache"; \
-			i386_pkgs="libc6:i386 libstdc++6:i386 libgcc-s1:i386"; \
 			echo "This can be installed with:"; \
 			echo "  sudo dpkg --add-architecture i386"; \
 			echo "  sudo apt update"; \
-			echo "  sudo apt install $$pkgs $$i386_pkgs"; \
+			echo "  sudo apt install $$pkgs $$apt_i386_pkgs"; \
 			printf "Run these apt commands now? [y/N] "; \
 			read answer; \
-			case "$$answer" in [Yy]*) sudo dpkg --add-architecture i386; sudo apt update; sudo apt install $$pkgs $$i386_pkgs ;; *) exit 1 ;; esac; \
+			case "$$answer" in [Yy]*) sudo dpkg --add-architecture i386; sudo apt update; sudo apt install $$pkgs $$apt_i386_pkgs ;; *) exit 1 ;; esac; \
 		elif [ "$$pm" = "dnf" ]; then \
-			pkgs="python3 python3-tkinter python3-pip make wmctrl desktop-file-utils gtk-update-icon-cache glibc.i686 libstdc++.i686 libgcc.i686"; \
+			pkgs="python3 python3-tkinter python3-pip make wmctrl desktop-file-utils gtk-update-icon-cache $$dnf_i686_pkgs"; \
 			echo "This can be installed with:"; \
 			echo "  sudo dnf install $$pkgs"; \
 			printf "Run this dnf command now? [y/N] "; \
