@@ -16,6 +16,8 @@ DEFAULT_CONFIG = {
 }
 
 PROTON_GE_URL = "https://github.com/GloriousEggroll/proton-ge-custom/releases/download/GE-Proton10-10/GE-Proton10-10.tar.gz"
+WINDOWS_DOTNET_DESKTOP_RUNTIME_URL = "https://aka.ms/dotnet/8.0/windowsdesktop-runtime-win-x64.exe"
+WINDOWS_DOTNET_INSTALLER_NAME = "windowsdesktop-runtime-8.0-win-x64.exe"
 
 
 def get_app_root() -> Path:
@@ -239,6 +241,48 @@ def get_proton_install_message(prefix_path: str | None = None) -> str:
 def check_proton_available() -> bool:
     """Check if Proton GE is installed and ready to be used for launches."""
     return _find_proton_bin() is not None
+
+
+def _windows_dotnet_shared_runtime_dir(prefix_path: Path, runtime_name: str) -> Path:
+    return prefix_path / "pfx" / "drive_c" / "Program Files" / "dotnet" / "shared" / runtime_name
+
+
+def _has_windows_dotnet_8_version(path: Path) -> bool:
+    if not path.exists():
+        return False
+    return any(child.is_dir() and child.name.startswith("8.") for child in path.iterdir())
+
+
+def check_windows_dotnet_available(prefix_path: str | Path | None = None) -> bool:
+    prefix = Path(prefix_path).expanduser() if prefix_path else get_default_prefix()
+    netcore_dir = _windows_dotnet_shared_runtime_dir(prefix, "Microsoft.NETCore.App")
+    desktop_dir = _windows_dotnet_shared_runtime_dir(prefix, "Microsoft.WindowsDesktop.App")
+    return _has_windows_dotnet_8_version(netcore_dir) and _has_windows_dotnet_8_version(desktop_dir)
+
+
+def get_windows_dotnet_status(prefix_path: str | Path | None = None) -> dict[str, str | bool]:
+    prefix = Path(prefix_path).expanduser() if prefix_path else get_default_prefix()
+    installer_path = get_app_root() / "downloads" / WINDOWS_DOTNET_INSTALLER_NAME
+    return {
+        "prefix_path": str(prefix),
+        "installed": check_windows_dotnet_available(prefix),
+        "installer_path": str(installer_path),
+        "installer_exists": installer_path.exists(),
+        "netcore_path": str(_windows_dotnet_shared_runtime_dir(prefix, "Microsoft.NETCore.App")),
+        "desktop_path": str(_windows_dotnet_shared_runtime_dir(prefix, "Microsoft.WindowsDesktop.App")),
+    }
+
+
+def get_dependency_diagnostics(prefix_path: str | Path | None = None) -> list[str]:
+    proton_status = get_proton_install_status()
+    dotnet_status = get_windows_dotnet_status(prefix_path)
+    return [
+        "Dependency diagnostics:",
+        f"[{'x' if proton_status['proton_installed'] else ' '}] Proton GE at {proton_status['proton_bin']}",
+        f"[{'x' if proton_status['steam_dummy_exists'] else ' '}] Steam dummy at {proton_status['steam_dummy_path']}",
+        f"[{'x' if dotnet_status['installed'] else ' '}] Windows .NET Desktop Runtime 8 in {dotnet_status['prefix_path']}",
+        f"[{'x' if dotnet_status['installer_exists'] else ' '}] Windows .NET installer cached at {dotnet_status['installer_path']}",
+    ]
 
 
 def _download_file(url: str, destination: Path, progress_callback: Callable[[int, int], None] | None = None) -> None:

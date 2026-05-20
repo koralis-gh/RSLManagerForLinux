@@ -79,8 +79,9 @@ install: check-prereqs
 	python3 -m venv "$(VENV_DIR)"
 	"$(PIP)" install --upgrade pip
 	"$(PIP)" install -r requirements.txt
+	"$(PYTHON)" scripts/setup_runtime.py install
 
-install-app:
+install-app: install
 	mkdir -p "$(BIN_DIR)" "$(ICON_DIR)" "$(PIXMAP_DIR)" "$(DESKTOP_DIR)"
 	cp img/rsl-icon.png "$(ICON_FILE)"
 	cp img/rsl-icon.png "$(PIXMAP_FILE)"
@@ -107,7 +108,13 @@ run:
 	@echo "RSLManagerForLinux started in the background. Log: $(LOG_FILE)"
 
 check:
-	@if [ -x "$(PYTHON)" ]; then "$(PYTHON)" -m py_compile config.py process.py gui.py; else python3 -m py_compile config.py process.py gui.py; fi
+	@if [ -x "$(PYTHON)" ]; then "$(PYTHON)" -m py_compile config.py process.py gui.py scripts/setup_runtime.py; else python3 -m py_compile config.py process.py gui.py scripts/setup_runtime.py; fi
+
+install-proton:
+	@if [ -x "$(PYTHON)" ]; then "$(PYTHON)" scripts/setup_runtime.py install-proton; else python3 scripts/setup_runtime.py install-proton; fi
+
+install-windows-dotnet:
+	@if [ -x "$(PYTHON)" ]; then "$(PYTHON)" scripts/setup_runtime.py install-windows-dotnet; else python3 scripts/setup_runtime.py install-windows-dotnet; fi
 
 diagnose:
 	@echo "RSLManagerForLinux diagnostics"
@@ -115,7 +122,7 @@ diagnose:
 	@echo "Python: $$(command -v python3 || true)"
 	@python3 -c 'import tkinter; print("Tkinter: ok")' 2>/dev/null || echo "Tkinter: missing"
 	@echo "Venv python: $$([ -x "$(PYTHON)" ] && echo "$(PYTHON)" || echo "missing")"
-	@echo "Proton: $$([ -x "$(HOME)/.RSLManagerForLinux/proton/proton" ] && echo "$(HOME)/.RSLManagerForLinux/proton/proton" || echo "missing")"
+	@if [ -x "$(PYTHON)" ]; then "$(PYTHON)" scripts/setup_runtime.py diagnose || true; else python3 scripts/setup_runtime.py diagnose || true; fi
 	@if command -v apt >/dev/null 2>&1; then \
 		echo "Package manager: apt"; \
 		for pkg in $(APT_I386_PKGS); do \

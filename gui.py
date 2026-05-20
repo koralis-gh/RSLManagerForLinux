@@ -39,6 +39,7 @@ class RSLManagerApp(ctk.CTk):
         self.config_data: Dict[str, Any] = {}
         self.config_messages: List[str] = []
         self.proton_available = False
+        self.windows_dotnet_available = False
         self.refresh_interval_ms = REFRESH_MS_DEFAULT
         self.process_refresh_job = None
         self.last_process_signature: tuple[tuple[int, ...], tuple[int, ...], bool] | None = None
@@ -214,16 +215,14 @@ class RSLManagerApp(ctk.CTk):
         # Main setup action buttons
         action_row = ctk.CTkFrame(self.setup_scroll, fg_color="transparent")
         action_row.grid(row=9, column=0, sticky="ew", pady=(0, 12))
-        action_row.grid_columnconfigure((0, 1, 2, 3), weight=1)
+        action_row.grid_columnconfigure((0, 1, 2), weight=1)
 
         self.create_config_button = ctk.CTkButton(action_row, text="Create Config", command=self._save_config)
         self.create_config_button.grid(row=0, column=0, padx=4, pady=4, sticky="ew")
         self.get_plarium_button = ctk.CTkButton(action_row, text="Get Plarium", command=lambda: webbrowser.open(PLARIUM_URL))
         self.get_plarium_button.grid(row=0, column=1, padx=4, pady=4, sticky="ew")
-        self.get_proton_button = ctk.CTkButton(action_row, text="Install Proton GE", command=self._install_proton)
-        self.get_proton_button.grid(row=0, column=2, padx=4, pady=4, sticky="ew")
-        self.open_config_button = ctk.CTkButton(action_row, text="Browse config", command=self._open_config_file)
-        self.open_config_button.grid(row=0, column=3, padx=4, pady=4, sticky="ew")
+        self.diagnose_button = ctk.CTkButton(action_row, text="Diagnose", command=self._run_diagnostics)
+        self.diagnose_button.grid(row=0, column=2, padx=4, pady=4, sticky="ew")
 
         # Setup status and validation messages
         self.setup_status_label = ctk.CTkLabel(
@@ -399,106 +398,48 @@ class RSLManagerApp(ctk.CTk):
         except OSError as exc:
             messagebox.showerror("Open Error", f"Unable to open log file: {APP_LOG_PATH}\n\n{exc}")
 
-    def _install_proton(self) -> None:
-        status = config_module.get_proton_install_status()
-
-        if status["proton_installed"]:
-            self.proton_available = True
-            self._refresh_state()
-            messagebox.showinfo(
-                "Proton GE Ready",
-                "Proton GE is already installed. You can now launch Raid.",
-            )
-            return
-
-        if not status["tarball_exists"]:
-            confirm = messagebox.askyesno(
-                "Download Proton GE",
-                "The Proton GE tarball is missing. Download it now?",
-            )
-            if not confirm:
-                return
-
-        self._show_proton_progress_dialog(status["tarball_exists"])
+    def _run_diagnostics(self) -> None:
+        self._update_config_from_fields()
+        self._save_config_data()
+        self.diagnose_button.configure(state="disabled", text="Checking...")
 
         def worker() -> None:
-            success, message = config_module.install_proton(progress_callback=self._report_proton_progress)
-            self.after(0, lambda: self._on_proton_install_done(success, message))
+            try:
+                result = subprocess.run(
+                    ["make", "diagnose"],
+                    cwd=config_module.get_repo_root(),
+                    check=False,
+                    text=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    timeout=30,
+                )
+                output = result.stdout.strip() or "No diagnostic output."
+            except (OSError, subprocess.SubprocessError) as exc:
+                fallback = "\n".join(config_module.get_dependency_diagnostics(self.config_data.get("prefix_path", "")))
+                output = f"{fallback}\n\nUnable to run make diagnose: {exc}"
+
+            self.after(0, lambda: self._show_diagnostics(output))
 
         threading.Thread(target=worker, daemon=True).start()
 
-    def _show_proton_progress_dialog(self, using_cached_tarball: bool = False) -> None:
-        if self.proton_progress_window is not None:
-            return
-
-        window = ctk.CTkToplevel(self)
-        window.title("Installing Proton GE")
-        window.geometry("420x120")
-        window.resizable(False, False)
-
-        action_text = "Extracting cached Proton GE..." if using_cached_tarball else "Downloading Proton GE..."
-        label = ctk.CTkLabel(window, text=action_text, anchor="w")
-        label.pack(padx=16, pady=(16, 8), fill="x")
-
-        progress_bar = ctk.CTkProgressBar(window, width=380)
-        progress_bar.set(0.0)
-        progress_bar.pack(padx=16, pady=(0, 10), fill="x")
-
-        status_label = ctk.CTkLabel(window, text="Starting install...", anchor="w")
-        status_label.pack(padx=16, pady=(0, 12), fill="x")
-
-        self.proton_progress_window = window
-        self.proton_progress_bar = progress_bar
-        self.proton_progress_label = status_label
-
-    def _close_proton_progress_dialog(self) -> None:
-        if self.proton_progress_window is not None:
-            self.proton_progress_window.destroy()
-        self.proton_progress_window = None
-        self.proton_progress_bar = None
-        self.proton_progress_label = None
-
-    def _report_proton_progress(self, downloaded: int, total: int) -> None:
-        self.after(0, lambda: self._update_proton_progress(downloaded, total))
-
-    def _update_proton_progress(self, downloaded: int, total: int) -> None:
-        if self.proton_progress_bar is None or self.proton_progress_label is None:
-            return
-
-        if total > 0:
-            progress = min(downloaded / total, 1.0)
-            self.proton_progress_bar.set(progress)
-            self.proton_progress_label.configure(
-                text=f"Downloaded {downloaded // 1024} KiB / {total // 1024} KiB"
-            )
-        else:
-            self.proton_progress_label.configure(text=f"Downloaded {downloaded // 1024} KiB")
-
-    def _on_proton_install_done(self, success: bool, message: str) -> None:
-        self._close_proton_progress_dialog()
-        if not success:
-            detail = config_module.get_proton_install_message()
-            messagebox.showerror(
-                "Proton Install Failed",
-                f"{message}\n\nCurrent install state:\n{detail}",
-            )
-            return
-
-        messagebox.showinfo(
-            "Proton Installed",
-            "Proton GE has been installed into ~/.RSLManagerForLinux/proton. You can now launch Raid.",
-        )
-        self.proton_available = config_module.check_proton_available()
+    def _show_diagnostics(self, output: str) -> None:
+        self.diagnose_button.configure(state="normal", text="Diagnose")
         self._refresh_state()
+        messagebox.showinfo("Diagnostics", output)
 
     # App state refresh helpers
     def _refresh_state(self) -> None:
         self.proton_available = config_module.check_proton_available()
+        prefix_path = self.config_data.get("prefix_path", "")
+        self.windows_dotnet_available = config_module.check_windows_dotnet_available(prefix_path)
         valid, messages = config_module.validate_config(self.config_data)
         self.config_messages = messages
-        if not self.proton_available:
-            prefix_path = self.config_data.get("prefix_path", "")
-            self._show_setup_frame(config_module.get_proton_install_message(prefix_path))
+        if not self.proton_available or not self.windows_dotnet_available:
+            detail_lines = config_module.get_dependency_diagnostics(prefix_path)
+            detail_lines.append("")
+            detail_lines.append("Run `make install` from the repo to install missing dependencies.")
+            self._show_setup_frame("\n".join(detail_lines))
             return
 
         if not valid:
@@ -514,7 +455,7 @@ class RSLManagerApp(ctk.CTk):
         self.setup_frame.grid()
         self.new_raid_button.configure(state="disabled", text="New Raid Process")
         self.edit_config_button.configure(state="disabled")
-        if "Proton" in status_text:
+        if "Dependency diagnostics" in status_text or "Proton" in status_text:
             self.setup_status_label.configure(text=status_text, text_color="#ffb86c")
         else:
             self.setup_status_label.configure(text=status_text, text_color=None)
@@ -524,7 +465,7 @@ class RSLManagerApp(ctk.CTk):
     def _show_process_frame(self) -> None:
         self.setup_frame.grid_remove()
         self.process_frame.grid()
-        if not self.launch_in_progress:
+        if not self.launch_in_progress and self.proton_available and self.windows_dotnet_available:
             self.new_raid_button.configure(state="normal", text="New Raid Process")
         self.edit_config_button.configure(state="normal")
 
@@ -533,6 +474,7 @@ class RSLManagerApp(ctk.CTk):
         raid_procs = process_module.get_raid_processes()
         plarium_procs = process_module.get_plarium_processes()
         self.proton_available = config_module.check_proton_available()
+        self.windows_dotnet_available = config_module.check_windows_dotnet_available(self.config_data.get("prefix_path", ""))
 
         process_signature = (
             tuple(proc["pid"] for proc in raid_procs),
@@ -618,6 +560,11 @@ class RSLManagerApp(ctk.CTk):
         self._save_config_data()
         if not self.proton_available:
             messagebox.showwarning("Proton Missing", "Proton GE is not available. Install it first.")
+            self._refresh_state()
+            return
+        if not self.windows_dotnet_available:
+            messagebox.showwarning("Windows .NET Missing", "Windows .NET Desktop Runtime 8 is missing from this Proton prefix. Run `make install` from the repo, then restart the app.")
+            self._refresh_state()
             return
 
         self._set_launch_in_progress()

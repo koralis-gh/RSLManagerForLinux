@@ -1,12 +1,12 @@
 # RSLManagerForLinux
 
-RSLManagerForLinux is a lightweight Linux launcher and process manager for Raid: Shadow Legends. It uses Proton GE to install and launch the game, shows running Raid and Plarium launcher processes, and provides simple controls for starting and exiting processes.
+Linux launcher and process manager for Raid: Shadow Legends. It installs Proton GE, installs the Windows .NET Desktop Runtime 8 into the Proton prefix, launches Plarium/Raid, and shows running Plarium and Raid processes.
 
 ## Prerequisites
 
-You need Python, Tkinter, venv support, pip, make, `wmctrl`, common desktop integration tools, and 32-bit runtime/font/graphics libraries for Proton/Wine. `wmctrl` is used to focus the existing app window instead of opening a second copy.
+You need Python, Tkinter, venv, pip, make, wmctrl, desktop integration tools, and 32-bit Wine/Proton runtime libraries.
 
-On Debian or Ubuntu:
+Debian/Ubuntu:
 
 ```bash
 sudo apt update
@@ -16,80 +16,67 @@ sudo apt update
 sudo apt install libc6:i386 libstdc++6:i386 libgcc-s1:i386 libfreetype6:i386 libfontconfig1:i386 libx11-6:i386 libxext6:i386 libxrender1:i386 libxi6:i386 libxrandr2:i386 libxcursor1:i386 libxcomposite1:i386 libxdamage1:i386 libxfixes3:i386 libgl1:i386 libegl1:i386
 ```
 
-If your distro package set does not include `gtk-update-icon-cache` by that name, install the GTK icon theme tools package for your distribution. The installer will continue if the icon cache tool is missing.
-
-On Fedora:
+Fedora:
 
 ```bash
 sudo dnf install python3 python3-tkinter python3-pip make wmctrl desktop-file-utils gtk-update-icon-cache
 sudo dnf install glibc.i686 libstdc++.i686 libgcc.i686 freetype.i686 fontconfig.i686 libX11.i686 libXext.i686 libXrender.i686 libXi.i686 libXrandr.i686 libXcursor.i686 libXcomposite.i686 libXdamage.i686 libXfixes.i686 mesa-libGL.i686 mesa-libEGL.i686
 ```
 
-On Fedora, Python venv support is normally included with Python.
-
 ## Install
 
-From the repo directory:
+From the repo:
 
 ```bash
-make install
 make install-app
 ```
 
-`make install` creates a local `.venv` inside this repo and installs Python requirements there. It does not install packages into your system Python.
-
-`make install-app` installs:
+This runs the full setup and installs the desktop/CLI launcher. It creates `.venv`, installs Python requirements, installs Proton GE under `~/.RSLManagerForLinux/proton`, installs Windows .NET Desktop Runtime 8 into the configured Proton prefix, and creates:
 
 - `~/.local/bin/RSLManagerForLinux`
 - `~/.local/share/applications/RSLManagerForLinux.desktop`
-- app icon files under `~/.local/share/icons` and `~/.local/share/pixmaps`
 
-If you move the repo, run `make install-app` again from the new repo path. It will update the launcher and desktop file in place.
+If you move the repo, rerun `make install-app` from the new location.
 
 ## Run
 
-After `make install-app`, launch from your app menu by searching for:
-
-```text
-RSLManagerForLinux
-```
-
-Or run from a shell:
+Open `RSLManagerForLinux` from your app menu, or run:
 
 ```bash
 RSLManagerForLinux
 ```
 
-If that command is not found, add `~/.local/bin` to your `PATH`.
-
-You can also run from the repo:
+From the repo you can also use:
 
 ```bash
 make run
 ```
 
-Logs from `make run` are written to:
-
-```text
-logs/RSLManagerForLinux.log
-```
-
-The installed app launcher also writes launch attempts, focus attempts, and startup failures to that same repo-local log file.
-
-## Development Check
-
-```bash
-make check
-```
-
-This compiles the Python files and uses the local `.venv` Python if it exists.
+Logs are written to `logs/RSLManagerForLinux.log`.
 
 ## Diagnostics
-
-If Proton starts but the Plarium installer crashes, run:
 
 ```bash
 make diagnose
 ```
 
-This prints whether the local venv, Tkinter, Proton, and required 32-bit Wine/Proton runtime packages are present. A repeated log message like `Wine cannot find the FreeType font library` means the 32-bit FreeType/fontconfig packages are still missing or were not installed for the VM you are testing in.
+This checks the venv, Tkinter, Proton GE, Windows .NET Desktop Runtime 8, and required 32-bit packages. The app also has a `Diagnose` button.
+
+## Useful Targets
+
+```bash
+make install              # full runtime setup without desktop app install
+make install-app          # full setup plus desktop/CLI launcher
+make install-proton       # reinstall/check Proton GE only
+make install-windows-dotnet # reinstall/check Windows .NET runtime only
+make uninstall-app        # remove desktop/CLI launcher only
+make check                # compile Python files
+```
+
+## Project Files
+
+- `gui.py` - CustomTkinter app
+- `config.py` - config, paths, Proton/runtime status helpers
+- `process.py` - process discovery and Proton launch
+- `scripts/setup_runtime.py` - Proton and Windows .NET runtime setup
+- `scripts/RSLManagerForLinux.in` - installed launcher template
