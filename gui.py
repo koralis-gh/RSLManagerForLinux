@@ -49,6 +49,10 @@ class RSLManagerApp(ctk.CTk):
         self.proton_progress_window = None
         self.proton_progress_bar = None
         self.proton_progress_label = None
+        self.show_window_numbers_var = tk.BooleanVar(value=False)
+        self.window_number_overlays: dict[str, tk.Toplevel] = {}
+        self.window_number_refresh_job = None
+        self.raid_window_pid_order: dict[int, int] = {}
         self.header_icon_image = self._load_header_icon_image(max_size=150)
         self.header_banner_source = self._load_header_banner_source()
         self.header_banner_image = self._resize_header_banner_image(1000)
@@ -237,7 +241,7 @@ class RSLManagerApp(ctk.CTk):
     def _create_process_frame(self) -> None:
         self.process_frame.grid(row=0, column=0, sticky="nsew")
         self.process_frame.grid_columnconfigure(0, weight=1)
-        self.process_frame.grid_rowconfigure(2, weight=1)
+        self.process_frame.grid_rowconfigure(3, weight=1)
 
         # Process page header and status message
         header_label = ctk.CTkLabel(self.process_frame, text="Raid process dashboard", font=ctk.CTkFont(size=20, weight="bold"))
@@ -246,8 +250,16 @@ class RSLManagerApp(ctk.CTk):
         self.process_status_label = ctk.CTkLabel(self.process_frame, text="", wraplength=760, justify="left")
         self.process_status_label.grid(row=1, column=0, sticky="w", padx=20, pady=(0, 12))
 
+        self.window_number_checkbox = ctk.CTkCheckBox(
+            self.process_frame,
+            text="Show window numbers",
+            variable=self.show_window_numbers_var,
+            command=self._toggle_window_number_overlays,
+        )
+        self.window_number_checkbox.grid(row=2, column=0, sticky="w", padx=20, pady=(0, 8))
+
         self.raid_cards_frame = ctk.CTkScrollableFrame(self.process_frame, fg_color="#1a1a1a")
-        self.raid_cards_frame.grid(row=2, column=0, sticky="nsew", padx=20, pady=(12, 20))
+        self.raid_cards_frame.grid(row=3, column=0, sticky="nsew", padx=20, pady=(4, 20))
         self.raid_cards_frame.grid_columnconfigure(0, weight=1)
 
     # Config load and population methods
@@ -477,11 +489,23 @@ class RSLManagerApp(ctk.CTk):
         self.windows_dotnet_available = config_module.check_windows_dotnet_available(self.config_data.get("prefix_path", ""))
 
         process_signature = (
-            tuple(proc["pid"] for proc in raid_procs),
+            tuple(
+                (
+                    proc["pid"],
+                    proc.get("window", {}).get("window_id", ""),
+                    proc.get("window", {}).get("x", 0),
+                    proc.get("window", {}).get("y", 0),
+                    proc.get("window", {}).get("width", 0),
+                    proc.get("window", {}).get("height", 0),
+                )
+                for proc in raid_procs
+            ),
             tuple(proc["pid"] for proc in plarium_procs),
             self.launch_in_progress,
+            self.show_window_numbers_var.get(),
         )
         if process_signature == self.last_process_signature:
+            self._sync_window_number_overlays(raid_procs)
             self.process_refresh_job = self.after(self.refresh_interval_ms, self._refresh_process_status)
             return
 
@@ -489,7 +513,7 @@ class RSLManagerApp(ctk.CTk):
 
         self.raid_cards_frame.destroy()
         self.raid_cards_frame = ctk.CTkScrollableFrame(self.process_frame, fg_color="#1a1a1a")
-        self.raid_cards_frame.grid(row=2, column=0, sticky="nsew", padx=20, pady=(12, 20))
+        self.raid_cards_frame.grid(row=3, column=0, sticky="nsew", padx=20, pady=(4, 20))
         self.raid_cards_frame.grid_columnconfigure(0, weight=1)
 
         if self.launch_in_progress and not raid_procs:
@@ -511,6 +535,9 @@ class RSLManagerApp(ctk.CTk):
         for index, proc in enumerate(raid_procs, start=1):
             self._add_raid_card(index, proc, row_index)
             row_index += 1
+
+        self.raid_window_pid_order = {proc["pid"]: index for index, proc in enumerate(raid_procs)}
+        self._sync_window_number_overlays(raid_procs)
 
         if self.process_refresh_job is not None:
             self.after_cancel(self.process_refresh_job)
@@ -553,6 +580,100 @@ class RSLManagerApp(ctk.CTk):
 
         exit_button = ctk.CTkButton(card, text="Exit", width=120, command=lambda pid=proc["pid"]: self._exit_raid_process(pid))
         exit_button.grid(row=0, column=2, sticky="e", padx=12)
+
+    def _toggle_window_number_overlays(self) -> None:
+        if not self.show_window_numbers_var.get():
+            self._cancel_window_number_refresh()
+            self._clear_window_number_overlays()
+            return
+        self.last_process_signature = None
+        self._refresh_process_status()
+        self._schedule_window_number_refresh()
+
+    def _schedule_window_number_refresh(self) -> None:
+        if not self.show_window_numbers_var.get():
+            return
+        if self.window_number_refresh_job is not None:
+            self.after_cancel(self.window_number_refresh_job)
+        self.window_number_refresh_job = self.after(50, self._refresh_window_number_overlays)
+
+    def _cancel_window_number_refresh(self) -> None:
+        if self.window_number_refresh_job is not None:
+            self.after_cancel(self.window_number_refresh_job)
+            self.window_number_refresh_job = None
+
+    def _refresh_window_number_overlays(self) -> None:
+        self.window_number_refresh_job = None
+        if not self.show_window_numbers_var.get():
+            self._clear_window_number_overlays()
+            return
+        numbered_windows = [window for window in process_module.get_raid_windows() if window["pid"] in self.raid_window_pid_order]
+        numbered_windows.sort(key=lambda window: self.raid_window_pid_order[window["pid"]])
+        self._sync_window_number_overlays_for_windows(numbered_windows)
+        self._schedule_window_number_refresh()
+
+    def _sync_window_number_overlays(self, raid_procs: List[Dict[str, Any]]) -> None:
+        windows = [proc["window"] for proc in raid_procs if proc.get("window")]
+        self._sync_window_number_overlays_for_windows(windows)
+
+    def _sync_window_number_overlays_for_windows(self, windows: List[Dict[str, Any]]) -> None:
+        if not self.show_window_numbers_var.get():
+            self._clear_window_number_overlays()
+            return
+
+        active_window_ids: set[str] = set()
+        for index, window in enumerate(windows, start=1):
+            window_id = str(window.get("window_id", ""))
+            if not window_id:
+                continue
+
+            active_window_ids.add(window_id)
+            overlay = self.window_number_overlays.get(window_id)
+            if overlay is None or not overlay.winfo_exists():
+                overlay = self._create_window_number_overlay(index)
+                self.window_number_overlays[window_id] = overlay
+            else:
+                label = overlay.children.get("number_label")
+                if isinstance(label, tk.Label):
+                    label.configure(text=str(index))
+
+            x = int(window.get("x", 0)) + 12
+            y = int(window.get("y", 0)) + 28
+            overlay.update_idletasks()
+            overlay.geometry(f"72x54+{x}+{y}")
+            overlay.deiconify()
+            overlay.attributes("-topmost", True)
+            overlay.lift()
+            overlay.update()
+
+        for window_id in list(self.window_number_overlays):
+            if window_id not in active_window_ids:
+                overlay = self.window_number_overlays.pop(window_id)
+                overlay.destroy()
+
+    def _create_window_number_overlay(self, index: int) -> tk.Toplevel:
+        overlay = tk.Toplevel()
+        overlay.overrideredirect(True)
+        overlay.attributes("-topmost", True)
+        overlay.configure(bg="#111111")
+        label = tk.Label(
+            overlay,
+            name="number_label",
+            text=str(index),
+            bg="#111111",
+            fg="#f8d44c",
+            font=("TkDefaultFont", 36, "bold"),
+            padx=18,
+            pady=6,
+        )
+        label.pack()
+        return overlay
+
+    def _clear_window_number_overlays(self) -> None:
+        for overlay in self.window_number_overlays.values():
+            if overlay.winfo_exists():
+                overlay.destroy()
+        self.window_number_overlays.clear()
 
     # Process launch and control actions
     def _start_new_process(self) -> None:

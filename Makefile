@@ -108,7 +108,7 @@ run:
 	@echo "RSLManagerForLinux started in the background. Log: $(LOG_FILE)"
 
 check:
-	@if [ -x "$(PYTHON)" ]; then "$(PYTHON)" -m py_compile config.py process.py gui.py scripts/setup_runtime.py; else python3 -m py_compile config.py process.py gui.py scripts/setup_runtime.py; fi
+	@if [ -x "$(PYTHON)" ]; then "$(PYTHON)" -m py_compile config.py process.py gui.py scripts/setup_runtime.py scripts/raid_data_diagnose.py; else python3 -m py_compile config.py process.py gui.py scripts/setup_runtime.py scripts/raid_data_diagnose.py; fi
 
 install-proton:
 	@if [ -x "$(PYTHON)" ]; then "$(PYTHON)" scripts/setup_runtime.py install-proton; else python3 scripts/setup_runtime.py install-proton; fi
@@ -123,6 +123,7 @@ diagnose:
 	@python3 -c 'import tkinter; print("Tkinter: ok")' 2>/dev/null || echo "Tkinter: missing"
 	@echo "Venv python: $$([ -x "$(PYTHON)" ] && echo "$(PYTHON)" || echo "missing")"
 	@if [ -x "$(PYTHON)" ]; then "$(PYTHON)" scripts/setup_runtime.py diagnose || true; else python3 scripts/setup_runtime.py diagnose || true; fi
+	@if [ -x "$(PYTHON)" ]; then "$(PYTHON)" scripts/raid_data_diagnose.py || true; else python3 scripts/raid_data_diagnose.py || true; fi
 	@if command -v apt >/dev/null 2>&1; then \
 		echo "Package manager: apt"; \
 		for pkg in $(APT_I386_PKGS); do \
@@ -136,3 +137,9 @@ diagnose:
 	else \
 		echo "Package manager: unknown"; \
 	fi
+
+raid-data:
+	@if [ -x "$(PYTHON)" ]; then "$(PYTHON)" scripts/raid_data_diagnose.py; else python3 scripts/raid_data_diagnose.py; fi
+
+raid-data-dump:
+	@if [ -x "$(PYTHON)" ]; then "$(PYTHON)" scripts/raid_data_diagnose.py --dump-db --dump-files --limit 500; else python3 scripts/raid_data_diagnose.py --dump-db --dump-files --limit 500; fi

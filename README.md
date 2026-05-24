@@ -60,7 +60,14 @@ Logs are written to `logs/RSLManagerForLinux.log`.
 make diagnose
 ```
 
-This checks the venv, Tkinter, Proton GE, Windows .NET Desktop Runtime 8, and required 32-bit packages. The app also has a `Diagnose` button.
+This checks the venv, Tkinter, Proton GE, Windows .NET Desktop Runtime 8, local Raid data files, and required 32-bit packages. The app also has a `Diagnose` button.
+
+To inspect only the local Raid account/session cache:
+
+```bash
+make raid-data
+make raid-data-dump
+```
 
 ## Useful Targets
 
@@ -69,6 +76,8 @@ make install              # full runtime setup without desktop app install
 make install-app          # full setup plus desktop/CLI launcher
 make install-proton       # reinstall/check Proton GE only
 make install-windows-dotnet # reinstall/check Windows .NET runtime only
+make raid-data            # inspect local Raid account/session cache
+make raid-data-dump       # verbose local data dump for manual inspection
 make uninstall-app        # remove desktop/CLI launcher only
 make check                # compile Python files
 ```
@@ -79,4 +88,5 @@ make check                # compile Python files
 - `config.py` - config, paths, Proton/runtime status helpers
 - `process.py` - process discovery and Proton launch
 - `scripts/setup_runtime.py` - Proton and Windows .NET runtime setup
+- `scripts/raid_data_diagnose.py` - read-only local Raid data diagnostics
 - `scripts/RSLManagerForLinux.in` - installed launcher template

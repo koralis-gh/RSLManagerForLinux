@@ -73,8 +73,64 @@ def _matches_process(proc: Dict[str, Any], keywords: List[str]) -> bool:
     return False
 
 
+def _get_window_rows() -> List[Dict[str, Any]]:
+    try:
+        result = subprocess.run(
+            ["wmctrl", "-lpG"],
+            check=False,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            timeout=2,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return []
+
+    if result.returncode != 0:
+        return []
+
+    windows: List[Dict[str, Any]] = []
+    for line in result.stdout.splitlines():
+        parts = line.split(None, 8)
+        if len(parts) < 9:
+            continue
+        window_id, desktop, pid, x, y, width, height, host, title = parts
+        try:
+            windows.append(
+                {
+                    "window_id": window_id,
+                    "desktop": int(desktop),
+                    "pid": int(pid),
+                    "x": int(x),
+                    "y": int(y),
+                    "width": int(width),
+                    "height": int(height),
+                    "host": host,
+                    "title": title,
+                }
+            )
+        except ValueError:
+            continue
+    return windows
+
+
+def get_raid_windows() -> List[Dict[str, Any]]:
+    windows: List[Dict[str, Any]] = []
+    for window in _get_window_rows():
+        title = window.get("title", "").lower()
+        if "raid" in title and "shadow legends" in title:
+            windows.append(window)
+    return windows
+
+
 def get_raid_processes() -> List[Dict[str, Any]]:
-    return [proc for proc in _list_linux_processes() if _matches_process(proc, ["raid.exe"])]
+    windows_by_pid = {window["pid"]: window for window in get_raid_windows()}
+    raid_procs = [proc for proc in _list_linux_processes() if _matches_process(proc, ["raid.exe"])]
+    for proc in raid_procs:
+        window = windows_by_pid.get(proc["pid"])
+        if window is not None:
+            proc["window"] = window
+    return raid_procs
 
 
 def get_plarium_processes() -> List[Dict[str, Any]]:
