@@ -142,4 +142,7 @@ raid-data:
 	@if [ -x "$(PYTHON)" ]; then "$(PYTHON)" scripts/raid_data_diagnose.py; else python3 scripts/raid_data_diagnose.py; fi
 
 raid-data-dump:
-	@if [ -x "$(PYTHON)" ]; then "$(PYTHON)" scripts/raid_data_diagnose.py --dump-db --dump-files --limit 500; else python3 scripts/raid_data_diagnose.py --dump-db --dump-files --limit 500; fi
+	@if [ -x "$(PYTHON)" ]; then "$(PYTHON)" scripts/raid_data_diagnose.py --dump-db; else python3 scripts/raid_data_diagnose.py --dump-db; fi
+
+raid-data-rows:
+	@if [ -x "$(PYTHON)" ]; then "$(PYTHON)" scripts/raid_data_diagnose.py --dump-db --dump-rows --dump-files --limit 500; else python3 scripts/raid_data_diagnose.py --dump-db --dump-rows --dump-files --limit 500; fi

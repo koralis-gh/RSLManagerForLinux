@@ -2,6 +2,7 @@ import io
 import json
 import os
 import subprocess
+import sys
 import threading
 import webbrowser
 from pathlib import Path
@@ -20,6 +21,8 @@ PROMO_CODE_URL = "https://raid-promo-link-finder.vercel.app/"
 CHAMPION_INFO_URL = "https://rsl-x.vercel.app/tools/champions-index"
 PLARIUM_URL = "https://plarium.com/en/plarium-play/"
 PROTON_GE_URL = "https://github.com/GloriousEggroll/proton-ge-custom/releases/download/GE-Proton10-10/GE-Proton10-10.tar.gz"
+UPDATE_REMOTE_URL = "https://github.com/koralis-gh/RSLManagerForLinux.git"
+UPDATE_REMOTE_BRANCH = "main"
 APP_ICON_PATH = Path(__file__).resolve().parent / "img" / "rsl-icon.png"
 APP_BANNER_PATH = Path(__file__).resolve().parent / "img" / "rsl-banner.png"
 APP_LOG_PATH = config_module.get_app_log_path()
@@ -53,6 +56,8 @@ class RSLManagerApp(ctk.CTk):
         self.window_number_overlays: dict[str, tk.Toplevel] = {}
         self.window_number_refresh_job = None
         self.raid_window_pid_order: dict[int, int] = {}
+        self.update_available_commit = ""
+        self.update_check_in_progress = False
         self.header_icon_image = self._load_header_icon_image(max_size=150)
         self.header_banner_source = self._load_header_banner_source()
         self.header_banner_image = self._resize_header_banner_image(1000)
@@ -61,6 +66,7 @@ class RSLManagerApp(ctk.CTk):
         self._create_widgets()
         self._load_config()
         self._refresh_state()
+        self.after(1000, self._start_update_check)
 
     def _set_window_icon(self) -> None:
         if not APP_ICON_PATH.exists():
@@ -159,6 +165,9 @@ class RSLManagerApp(ctk.CTk):
         self.open_log_button.grid(row=0, column=3, padx=4, pady=3, sticky="ew")
         self.new_raid_button = ctk.CTkButton(self.button_frame, text="New Raid Process", command=self._start_new_process)
         self.new_raid_button.grid(row=1, column=0, columnspan=4, padx=4, pady=3, sticky="ew")
+        self.update_button = ctk.CTkButton(self.button_frame, text="Update Available", command=self._run_update)
+        self.update_button.grid(row=2, column=0, columnspan=4, padx=4, pady=3, sticky="ew")
+        self.update_button.grid_remove()
 
         # Main content area containing setup and process pages
         self.content_frame = ctk.CTkFrame(self, fg_color="#111111")
@@ -410,6 +419,129 @@ class RSLManagerApp(ctk.CTk):
         except OSError as exc:
             messagebox.showerror("Open Error", f"Unable to open log file: {APP_LOG_PATH}\n\n{exc}")
 
+    def _start_update_check(self) -> None:
+        if self.update_check_in_progress:
+            return
+
+        self.update_check_in_progress = True
+
+        def worker() -> None:
+            update_commit = ""
+            try:
+                update_commit = self._find_available_update_commit()
+            except (OSError, subprocess.SubprocessError) as exc:
+                config_module.append_app_log(f"Update check failed: {exc}")
+            finally:
+                self.after(0, lambda: self._finish_update_check(update_commit))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _find_available_update_commit(self) -> str:
+        repo_root = config_module.get_repo_root()
+        try:
+            fetch_result = subprocess.run(
+                ["git", "fetch", "--quiet", UPDATE_REMOTE_URL, UPDATE_REMOTE_BRANCH],
+                cwd=repo_root,
+                check=False,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=30,
+            )
+        except (OSError, subprocess.SubprocessError) as exc:
+            config_module.append_app_log(f"Update check failed: {exc}")
+            return ""
+        if fetch_result.returncode != 0:
+            config_module.append_app_log(f"Update check failed: {fetch_result.stderr.strip()}")
+            return ""
+
+        head = self._git_stdout(["git", "rev-parse", "HEAD"])
+        remote_head = self._git_stdout(["git", "rev-parse", "FETCH_HEAD"])
+        if not head or not remote_head or head == remote_head:
+            return ""
+
+        try:
+            ancestor_result = subprocess.run(
+                ["git", "merge-base", "--is-ancestor", head, remote_head],
+                cwd=repo_root,
+                check=False,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=10,
+            )
+        except (OSError, subprocess.SubprocessError) as exc:
+            config_module.append_app_log(f"Update check failed: {exc}")
+            return ""
+        if ancestor_result.returncode != 0:
+            config_module.append_app_log("Update check found a remote commit, but local branch is not a fast-forward.")
+            return ""
+
+        return remote_head
+
+    def _git_stdout(self, command: list[str]) -> str:
+        try:
+            result = subprocess.run(
+                command,
+                cwd=config_module.get_repo_root(),
+                check=False,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                timeout=10,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return ""
+        if result.returncode != 0:
+            return ""
+        return result.stdout.strip()
+
+    def _finish_update_check(self, update_commit: str) -> None:
+        self.update_check_in_progress = False
+        self.update_available_commit = update_commit
+        if not update_commit:
+            self.update_button.grid_remove()
+            return
+
+        self.update_button.configure(text=f"Update Available ({update_commit[:7]})", state="normal")
+        self.update_button.grid()
+
+    def _run_update(self) -> None:
+        self.update_button.configure(text="Updating...", state="disabled")
+
+        def worker() -> None:
+            try:
+                result = subprocess.run(
+                    ["git", "pull", "--ff-only", UPDATE_REMOTE_URL, UPDATE_REMOTE_BRANCH],
+                    cwd=config_module.get_repo_root(),
+                    check=False,
+                    text=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    timeout=120,
+                )
+                output = result.stdout.strip()
+            except (OSError, subprocess.SubprocessError) as exc:
+                self.after(0, lambda: self._show_update_failed(str(exc)))
+                return
+
+            if result.returncode != 0:
+                self.after(0, lambda: self._show_update_failed(output or "git pull failed."))
+                return
+
+            config_module.append_app_log(f"Update applied: {output}")
+            self.after(0, self._restart_after_update)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _show_update_failed(self, output: str) -> None:
+        self.update_button.configure(text="Update Available", state="normal")
+        messagebox.showerror("Update Failed", output)
+
+    def _restart_after_update(self) -> None:
+        config_module.append_app_log("Restarting after update")
+        os.chdir(config_module.get_repo_root())
+        os.execv(sys.executable, [sys.executable, str(Path(__file__).resolve())])
+
     def _run_diagnostics(self) -> None:
         self._update_config_from_fields()
         self._save_config_data()
@@ -578,8 +710,118 @@ class RSLManagerApp(ctk.CTk):
         pid_label = ctk.CTkLabel(card, text=f"PID: {proc['pid']}")
         pid_label.grid(row=0, column=1, sticky="w", padx=12)
 
+        has_window = bool(proc.get("window"))
+        button_state = "normal" if has_window else "disabled"
+        center_button = ctk.CTkButton(
+            card,
+            text="><",
+            width=48,
+            state=button_state,
+            command=lambda pid=proc["pid"]: self._center_raid_window(pid),
+        )
+        center_button.grid(row=0, column=2, sticky="e", padx=(12, 4))
+
+        focus_button = ctk.CTkButton(
+            card,
+            text="Focus",
+            width=100,
+            state=button_state,
+            command=lambda pid=proc["pid"]: self._focus_raid_window(pid),
+        )
+        focus_button.grid(row=0, column=3, sticky="e", padx=4)
+
         exit_button = ctk.CTkButton(card, text="Exit", width=120, command=lambda pid=proc["pid"]: self._exit_raid_process(pid))
-        exit_button.grid(row=0, column=2, sticky="e", padx=12)
+        exit_button.grid(row=0, column=4, sticky="e", padx=(4, 12))
+
+    def _get_raid_window_for_pid(self, pid: int) -> Dict[str, Any] | None:
+        return process_module.get_raid_window_for_pid(pid)
+
+    def _focus_raid_window(self, pid: int) -> None:
+        window = self._get_raid_window_for_pid(pid)
+        if window is None:
+            self.process_status_label.configure(text=f"No Raid window found for PID {pid}")
+            self.last_process_signature = None
+            self._refresh_process_status()
+            return
+
+        if not process_module.focus_window(str(window["window_id"])):
+            self.process_status_label.configure(text=f"Unable to focus Raid window for PID {pid}")
+            return
+
+        self.process_status_label.configure(text=f"Focused Raid window for PID {pid}")
+
+    def _center_raid_window(self, pid: int) -> None:
+        window = self._get_raid_window_for_pid(pid)
+        if window is None:
+            self.process_status_label.configure(text=f"No Raid window found for PID {pid}")
+            self.last_process_signature = None
+            self._refresh_process_status()
+            return
+
+        monitor = self._get_monitor_for_window(window)
+        screen_x = int(monitor["x"])
+        screen_y = int(monitor["y"])
+        screen_width = max(1, int(monitor["width"]))
+        screen_height = max(1, int(monitor["height"]))
+        margin = 48
+        max_width = max(320, screen_width - margin)
+        max_height = max(240, screen_height - margin)
+        width = min(max(320, int(window.get("width", 0) or 0)), max_width)
+        height = min(max(240, int(window.get("height", 0) or 0)), max_height)
+        x = screen_x + max(0, (screen_width - width) // 2)
+        y = screen_y + max(0, (screen_height - height) // 2)
+
+        window_id = str(window["window_id"])
+        if not process_module.move_resize_window(window_id, x, y, width, height):
+            self.process_status_label.configure(text=f"Unable to center Raid window for PID {pid}")
+            return
+
+        process_module.focus_window(window_id)
+        self.process_status_label.configure(text=f"Centered Raid window for PID {pid}")
+
+    def _get_monitor_for_window(self, window: Dict[str, Any]) -> Dict[str, int]:
+        fallback = {
+            "x": 0,
+            "y": 0,
+            "width": max(1, self.winfo_screenwidth()),
+            "height": max(1, self.winfo_screenheight()),
+        }
+        monitors = process_module.get_monitor_geometries()
+        if not monitors:
+            return fallback
+
+        window_x = int(window.get("x", 0) or 0)
+        window_y = int(window.get("y", 0) or 0)
+        window_width = int(window.get("width", 0) or 0)
+        window_height = int(window.get("height", 0) or 0)
+        center_x = window_x + max(1, window_width) // 2
+        center_y = window_y + max(1, window_height) // 2
+
+        for monitor in monitors:
+            monitor_x = int(monitor["x"])
+            monitor_y = int(monitor["y"])
+            monitor_width = int(monitor["width"])
+            monitor_height = int(monitor["height"])
+            if monitor_x <= center_x < monitor_x + monitor_width and monitor_y <= center_y < monitor_y + monitor_height:
+                return {
+                    "x": monitor_x,
+                    "y": monitor_y,
+                    "width": monitor_width,
+                    "height": monitor_height,
+                }
+
+        def distance_to_monitor(monitor: Dict[str, Any]) -> int:
+            monitor_center_x = int(monitor["x"]) + int(monitor["width"]) // 2
+            monitor_center_y = int(monitor["y"]) + int(monitor["height"]) // 2
+            return abs(center_x - monitor_center_x) + abs(center_y - monitor_center_y)
+
+        nearest = min(monitors, key=distance_to_monitor)
+        return {
+            "x": int(nearest["x"]),
+            "y": int(nearest["y"]),
+            "width": int(nearest["width"]),
+            "height": int(nearest["height"]),
+        }
 
     def _toggle_window_number_overlays(self) -> None:
         if not self.show_window_numbers_var.get():

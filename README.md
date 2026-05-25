@@ -67,6 +67,7 @@ To inspect only the local Raid account/session cache:
 ```bash
 make raid-data
 make raid-data-dump
+make raid-data-rows
 ```
 
 ## Useful Targets
@@ -77,7 +78,8 @@ make install-app          # full setup plus desktop/CLI launcher
 make install-proton       # reinstall/check Proton GE only
 make install-windows-dotnet # reinstall/check Windows .NET runtime only
 make raid-data            # inspect local Raid account/session cache
-make raid-data-dump       # verbose local data dump for manual inspection
+make raid-data-dump       # list raidV2.db tables, columns, and row counts
+make raid-data-rows       # verbose local data dump for manual inspection
 make uninstall-app        # remove desktop/CLI launcher only
 make check                # compile Python files
 ```

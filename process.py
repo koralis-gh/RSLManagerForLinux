@@ -1,4 +1,5 @@
 import os
+import re
 import signal
 import subprocess
 import threading
@@ -123,6 +124,51 @@ def get_raid_windows() -> List[Dict[str, Any]]:
     return windows
 
 
+def get_raid_window_for_pid(pid: int) -> Dict[str, Any] | None:
+    for window in get_raid_windows():
+        if window.get("pid") == pid:
+            return window
+    return None
+
+
+def get_monitor_geometries() -> List[Dict[str, Any]]:
+    try:
+        result = subprocess.run(
+            ["xrandr", "--listmonitors"],
+            check=False,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            timeout=2,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return []
+
+    if result.returncode != 0:
+        return []
+
+    monitors: List[Dict[str, Any]] = []
+    geometry_pattern = re.compile(r"(?P<width>\d+)/\d+x(?P<height>\d+)/\d+\+(?P<x>-?\d+)\+(?P<y>-?\d+)")
+    for line in result.stdout.splitlines()[1:]:
+        match = geometry_pattern.search(line)
+        if match is None:
+            continue
+        try:
+            monitors.append(
+                {
+                    "x": int(match.group("x")),
+                    "y": int(match.group("y")),
+                    "width": int(match.group("width")),
+                    "height": int(match.group("height")),
+                    "name": line.split()[-1],
+                }
+            )
+        except (ValueError, IndexError):
+            continue
+
+    return monitors
+
+
 def get_raid_processes() -> List[Dict[str, Any]]:
     windows_by_pid = {window["pid"]: window for window in get_raid_windows()}
     raid_procs = [proc for proc in _list_linux_processes() if _matches_process(proc, ["raid.exe"])]
@@ -157,6 +203,48 @@ def kill_process(pid: int, sig: int = signal.SIGTERM) -> bool:
         return True
     except OSError:
         return False
+
+
+def focus_window(window_id: str) -> bool:
+    if not window_id:
+        return False
+
+    try:
+        result = subprocess.run(
+            ["wmctrl", "-ia", window_id],
+            check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=2,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return result.returncode == 0
+
+
+def move_resize_window(window_id: str, x: int, y: int, width: int, height: int) -> bool:
+    if not window_id:
+        return False
+
+    geometry = f"0,{x},{y},{width},{height}"
+    try:
+        subprocess.run(
+            ["wmctrl", "-ir", window_id, "-b", "remove,maximized_vert,maximized_horz"],
+            check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=2,
+        )
+        result = subprocess.run(
+            ["wmctrl", "-ir", window_id, "-e", geometry],
+            check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=2,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return result.returncode == 0
 
 
 def launch_raid(game_exe_path: str, prefix_path: str) -> tuple[bool, str]:

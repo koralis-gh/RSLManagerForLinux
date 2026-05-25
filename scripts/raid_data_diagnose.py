@@ -119,37 +119,70 @@ def _extract_event_name(value: Any) -> str:
 
 def _read_sqlite_counts(connection: sqlite3.Connection) -> dict[str, int]:
     counts: dict[str, int] = {}
-    for table in ("Dictionary", "Events", "Migrations"):
+    for table in _get_table_names(connection):
         try:
-            row = connection.execute(f"select count(*) from {table}").fetchone()
+            row = connection.execute(f"select count(*) from {_quote_identifier(table)}").fetchone()
             counts[table] = int(row[0]) if row else 0
         except sqlite3.Error:
             counts[table] = -1
     return counts
 
 
-def _dump_raid_db(connection: sqlite3.Connection, event_limit: int, max_value_chars: int) -> list[str]:
-    lines: list[str] = ["", "raidV2.db dump:"]
-    schema_rows = connection.execute(
-        "select name, sql from sqlite_master where type='table' order by name"
-    ).fetchall()
-    lines.append("Schema:")
-    for name, sql in schema_rows:
-        lines.append(f"- {name}: {sql}")
+def _quote_identifier(identifier: str) -> str:
+    return '"' + identifier.replace('"', '""') + '"'
 
-    table_names = ["Dictionary", "Events", "Migrations"]
-    for table in table_names:
-        count_row = connection.execute(f"select count(*) from {table}").fetchone()
+
+def _get_table_names(connection: sqlite3.Connection) -> list[str]:
+    rows = connection.execute(
+        "select name from sqlite_master where type='table' order by name"
+    ).fetchall()
+    return [str(row[0]) for row in rows]
+
+
+def _dump_raid_db_inventory(connection: sqlite3.Connection) -> list[str]:
+    lines: list[str] = ["", "raidV2.db table inventory:"]
+    for table in _get_table_names(connection):
+        quoted_table = _quote_identifier(table)
+        count_row = connection.execute(f"select count(*) from {quoted_table}").fetchone()
+        count = int(count_row[0]) if count_row else 0
+        columns = connection.execute(f"pragma table_info({quoted_table})").fetchall()
+
+        lines.append(f"{table}: {count} row(s)")
+        if not columns:
+            lines.append("  columns: none")
+            continue
+
+        for _cid, name, column_type, notnull, default_value, primary_key in columns:
+            constraints: list[str] = []
+            if primary_key:
+                constraints.append("primary key")
+            if notnull:
+                constraints.append("not null")
+            if default_value is not None:
+                constraints.append(f"default {default_value}")
+            detail = f"{name} {column_type}".strip()
+            if constraints:
+                detail = f"{detail} ({', '.join(constraints)})"
+            lines.append(f"  - {detail}")
+
+    return lines
+
+
+def _dump_raid_db_rows(connection: sqlite3.Connection, event_limit: int, max_value_chars: int) -> list[str]:
+    lines: list[str] = ["", "raidV2.db row dump:"]
+    for table in _get_table_names(connection):
+        quoted_table = _quote_identifier(table)
+        count_row = connection.execute(f"select count(*) from {quoted_table}").fetchone()
         count = int(count_row[0]) if count_row else 0
         lines.append("")
         if table == "Events" and count > event_limit:
             lines.append(f"{table}: {count} row(s), showing newest {event_limit}")
-            rows = connection.execute(f"select * from {table} order by Id desc limit ?", (event_limit,)).fetchall()
+            rows = connection.execute(f"select * from {quoted_table} order by Id desc limit ?", (event_limit,)).fetchall()
         else:
             lines.append(f"{table}: {count} row(s)")
-            rows = connection.execute(f"select * from {table}").fetchall()
+            rows = connection.execute(f"select * from {quoted_table}").fetchall()
 
-        columns = [description[0] for description in connection.execute(f"select * from {table} limit 0").description]
+        columns = [description[0] for description in connection.execute(f"select * from {quoted_table} limit 0").description]
         for row_index, row in enumerate(rows, start=1):
             lines.append(f"{table} row {row_index}:")
             for column, value in zip(columns, row):
@@ -159,7 +192,7 @@ def _dump_raid_db(connection: sqlite3.Connection, event_limit: int, max_value_ch
     return lines
 
 
-def _diagnose_raid_db(db_path: Path, limit: int, dump_db: bool, max_value_chars: int) -> list[str]:
+def _diagnose_raid_db(db_path: Path, limit: int, dump_db: bool, dump_rows: bool, max_value_chars: int) -> list[str]:
     lines: list[str] = []
     lines.append("Raid account/session data:")
     if not db_path.exists():
@@ -180,21 +213,24 @@ def _diagnose_raid_db(db_path: Path, limit: int, dump_db: bool, max_value_chars:
             + ", ".join(f"{table}={count if count >= 0 else 'unreadable'}" for table, count in counts.items())
         )
 
-        dictionary_rows = connection.execute("select Key, Value from Dictionary order by Key").fetchall()
-        for key, value in dictionary_rows:
-            parsed = _load_json(value)
-            if key == "UserId" and isinstance(parsed, dict):
-                user_id = parsed.get("i", "unknown")
-                player_id = parsed.get("m", "unknown")
-                lines.append(f"Dictionary UserId: {user_id} | {player_id}")
-            else:
-                lines.append(f"Dictionary {key}: {len(value)} chars")
+        if "Dictionary" in counts:
+            dictionary_rows = connection.execute("select Key, Value from Dictionary order by Key").fetchall()
+            for key, value in dictionary_rows:
+                parsed = _load_json(value)
+                if key == "UserId" and isinstance(parsed, dict):
+                    user_id = parsed.get("i", "unknown")
+                    player_id = parsed.get("m", "unknown")
+                    lines.append(f"Dictionary UserId: {user_id} | {player_id}")
+                else:
+                    lines.append(f"Dictionary {key}: {len(value)} chars")
 
         event_count = counts.get("Events", 0)
         if event_count <= 0:
             lines.append("Events: none queued right now")
             if dump_db:
-                lines.extend(_dump_raid_db(connection, limit, max_value_chars))
+                lines.extend(_dump_raid_db_inventory(connection))
+            if dump_rows:
+                lines.extend(_dump_raid_db_rows(connection, limit, max_value_chars))
             return lines
 
         grouped: dict[tuple[str, str, str], Counter[str]] = defaultdict(Counter)
@@ -222,7 +258,9 @@ def _diagnose_raid_db(db_path: Path, limit: int, dump_db: bool, max_value_chars:
             lines.append(f"Session {user_id} | {player_id} | {session_id}: {top_events}")
 
         if dump_db:
-            lines.extend(_dump_raid_db(connection, limit, max_value_chars))
+            lines.extend(_dump_raid_db_inventory(connection))
+        if dump_rows:
+            lines.extend(_dump_raid_db_rows(connection, limit, max_value_chars))
     except sqlite3.Error as exc:
         lines.append(f"Unable to inspect raidV2.db: {exc}")
     finally:
@@ -347,7 +385,8 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Read-only Raid local data diagnostics")
     parser.add_argument("--prefix", default=None, help="Proton prefix to inspect")
     parser.add_argument("--limit", type=int, default=50, help="Recent Events rows to sample")
-    parser.add_argument("--dump-db", action="store_true", help="Dump raidV2.db schema and table rows")
+    parser.add_argument("--dump-db", action="store_true", help="Dump raidV2.db table columns and row counts")
+    parser.add_argument("--dump-rows", action="store_true", help="Dump raidV2.db table rows")
     parser.add_argument("--dump-files", action="store_true", help="Show small file previews and recent file inventory")
     parser.add_argument("--max-value-chars", type=int, default=4000, help="Max characters per dumped DB value")
     args = parser.parse_args()
@@ -363,7 +402,7 @@ def main() -> int:
         "Raid local data diagnostics",
         f"Prefix: {prefix}",
         "",
-        *_diagnose_raid_db(db_path, max(args.limit, 1), args.dump_db, max(args.max_value_chars, 100)),
+        *_diagnose_raid_db(db_path, max(args.limit, 1), args.dump_db, args.dump_rows, max(args.max_value_chars, 100)),
         *_diagnose_data_files(prefix, args.dump_files),
     ]
     print("\n".join(lines))
